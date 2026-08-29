@@ -1,4 +1,4 @@
-import { Cell, GameState, Player, TurnEvent, PLAYER_COLORS } from "@/types/game";
+import { Cell, GameState, Player, BoardSnapshot, CellSnapshot, PLAYER_COLORS } from "@/types/game";
 
 // Get the capacity of a cell based on its position
 export const getCellCapacity = (
@@ -13,10 +13,7 @@ export const getCellCapacity = (
   const isRight = col === cols - 1;
 
   const adjacentCount =
-    (isTop ? 0 : 1) +
-    (isBottom ? 0 : 1) +
-    (isLeft ? 0 : 1) +
-    (isRight ? 0 : 1);
+    (isTop ? 0 : 1) + (isBottom ? 0 : 1) + (isLeft ? 0 : 1) + (isRight ? 0 : 1);
 
   // Corner: 1, Edge: 2, Inner: 3
   return adjacentCount - 1;
@@ -36,7 +33,7 @@ export const createBoard = (rows: number, cols: number): Cell[][] => {
 };
 
 // Get orthogonal neighbors
-export const getNeighbors = (
+const getNeighbors = (
   row: number,
   col: number,
   rows: number,
@@ -55,24 +52,63 @@ const cloneBoard = (board: Cell[][]): Cell[][] => {
   return board.map((row) => row.map((cell) => ({ ...cell })));
 };
 
-// Process explosions and chain reactions (returns new board and events)
-const processExplosions = (
+// Create a board snapshot from a board state
+const createSnapshot = (
+  board: Cell[][],
+  changedCells: string[] = []
+): CellSnapshot[][] => {
+  return board.map((row, r) =>
+    row.map((cell, c) => {
+      const key = `${r}-${c}`;
+      const isChanged = changedCells.includes(key);
+      return {
+        orbs: cell.orbs,
+        ownerId: cell.ownerId,
+        animating: isChanged ? undefined : undefined, // Will be set by caller
+      };
+    })
+  );
+};
+
+// Generate board snapshots for chain reaction animation
+const generateSnapshots = (
   board: Cell[][],
   rows: number,
   cols: number,
-  events: TurnEvent[]
-): { board: Cell[][]; events: TurnEvent[] } => {
-  const newBoard = cloneBoard(board);
-  const newEvents = [...events];
+  placeRow: number,
+  placeCol: number,
+  playerId: string
+): BoardSnapshot[] => {
+  const snapshots: BoardSnapshot[] = [];
+  const workingBoard = cloneBoard(board);
+
+  // Snapshot 1: Before place (empty cell or existing orbs)
+  snapshots.push({
+    board: createSnapshot(workingBoard, []),
+    changedCells: [],
+  });
+
+  // Place the orb
+  workingBoard[placeRow][placeCol].orbs += 1;
+  workingBoard[placeRow][placeCol].ownerId = playerId;
+
+  // Snapshot 2: After placing orb
+  snapshots.push({
+    board: createSnapshot(workingBoard, [`${placeRow}-${placeCol}`]),
+    changedCells: [`${placeRow}-${placeCol}`],
+  });
+
+  // Process chain reactions, capturing snapshots at each step
   let step = 0;
   const maxSteps = rows * cols * 4;
 
   while (step < maxSteps) {
     let foundExplosion = false;
+    const changedInStep: string[] = [];
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        const cell = newBoard[r][c];
+        const cell = workingBoard[r][c];
         if (!cell.ownerId) continue;
 
         const capacity = getCellCapacity(r, c, rows, cols);
@@ -80,44 +116,36 @@ const processExplosions = (
           foundExplosion = true;
           const explodingPlayer = cell.ownerId;
 
+          // Mark explosion
+          changedInStep.push(`${r}-${c}`);
+
+          // Clear the exploding cell
           cell.orbs = 0;
           cell.ownerId = null;
 
-          newEvents.push({
-            type: "explosion",
-            row: r,
-            col: c,
-            playerId: explodingPlayer,
-            chainReactionStep: step,
-          });
-
+          // Send orbs to neighbors
           const neighbors = getNeighbors(r, c, rows, cols);
           for (const [nr, nc] of neighbors) {
-            const neighborCell = newBoard[nr][nc];
-            const prevOwner = neighborCell.ownerId;
-
-            neighborCell.orbs += 1;
-            neighborCell.ownerId = explodingPlayer;
-
-            if (prevOwner && prevOwner !== explodingPlayer) {
-              newEvents.push({
-                type: "capture",
-                row: nr,
-                col: nc,
-                playerId: explodingPlayer,
-                chainReactionStep: step,
-              });
-            }
+            workingBoard[nr][nc].orbs += 1;
+            workingBoard[nr][nc].ownerId = explodingPlayer;
+            changedInStep.push(`${nr}-${nc}`);
           }
         }
       }
     }
 
     if (!foundExplosion) break;
+
+    // Snapshot for this chain reaction step
+    snapshots.push({
+      board: createSnapshot(workingBoard, changedInStep),
+      changedCells: [...changedInStep],
+    });
+
     step++;
   }
 
-  return { board: newBoard, events: newEvents };
+  return snapshots;
 };
 
 // Count orbs for a player
@@ -205,11 +233,12 @@ export const createOfflineGame = (
     started: true,
     winner: undefined,
     turnEvents: [],
+    boardSnapshots: [],
     roundNumber: 1,
   };
 };
 
-// Place an orb locally
+// Place an orb locally - returns new state with boardSnapshots for animation
 export const placeOrbLocal = (
   game: GameState,
   playerId: string,
@@ -229,22 +258,23 @@ export const placeOrbLocal = (
 
   if (cell.ownerId !== null && cell.ownerId !== playerId) return null;
 
-  // Clone the board for immutability
-  const newBoard = cloneBoard(game.board);
-  newBoard[row][col].orbs += 1;
-  newBoard[row][col].ownerId = playerId;
-
-  // Initialize events
-  const events: TurnEvent[] = [
-    { type: "place", row, col, playerId, playerName: player.name },
-  ];
-
-  // Process explosions
-  const { board: finalBoard, events: allEvents } = processExplosions(
-    newBoard,
+  // Generate board snapshots for animation
+  const boardSnapshots = generateSnapshots(
+    game.board,
     game.rows,
     game.cols,
-    events
+    row,
+    col,
+    playerId
+  );
+
+  // Get the final board state from the last snapshot
+  const lastSnapshot = boardSnapshots[boardSnapshots.length - 1];
+  const finalBoard: Cell[][] = lastSnapshot.board.map((snapRow) =>
+    snapRow.map((snap) => ({
+      orbs: snap.orbs,
+      ownerId: snap.ownerId,
+    }))
   );
 
   // Update players
@@ -261,11 +291,6 @@ export const placeOrbLocal = (
     const orbCount = countPlayerOrbs(finalBoard, p.id);
     if (orbCount === 0) {
       p.active = false;
-      allEvents.push({
-        type: "elimination",
-        playerId: p.id,
-        playerName: p.name,
-      });
     }
   }
 
@@ -274,11 +299,6 @@ export const placeOrbLocal = (
   let winner: Player | undefined;
   if (activePlayers.length === 1) {
     winner = activePlayers[0];
-    allEvents.push({
-      type: "win",
-      playerId: winner.id,
-      playerName: winner.name,
-    });
   }
 
   // Advance turn if no winner
@@ -293,22 +313,37 @@ export const placeOrbLocal = (
     newCurrentPlayerIndex = nextIndex;
   }
 
+  // Generate turn events from the final state
+  const turnEvents: any[] = [];
+  if (boardSnapshots.length > 2) {
+    // There were chain reactions
+    for (let i = 2; i < boardSnapshots.length; i++) {
+      const snapshot = boardSnapshots[i];
+      for (const cellKey of snapshot.changedCells) {
+        const [r, c] = cellKey.split("-").map(Number);
+        const cell = snapshot.board[r][c];
+        if (cell.ownerId !== playerId) {
+          turnEvents.push({ type: "capture", row: r, col: c, playerId, playerName: player.name });
+        }
+      }
+    }
+  }
+
   return {
     ...game,
     board: finalBoard,
     players: newPlayers,
     currentPlayerIndex: newCurrentPlayerIndex,
     currentPlayer: newPlayers[newCurrentPlayerIndex].id,
-    turnEvents: allEvents,
+    turnEvents,
+    boardSnapshots,
     winner,
   };
 };
 
 // AI Move Logic
-// AI difficulty levels: easy, medium, hard
 type AIDifficulty = "easy" | "medium" | "hard";
 
-// Score a potential move for the AI
 const scoreMove = (
   game: GameState,
   playerId: string,
@@ -319,24 +354,18 @@ const scoreMove = (
   const cell = game.board[row][col];
   const capacity = getCellCapacity(row, col, game.rows, game.cols);
 
-  // Can't place here
   if (cell.ownerId !== null && cell.ownerId !== playerId) return -1000;
 
   let score = 0;
-
-  // Base score for placing
   score += 10;
 
-  // Score for being close to explosion
   if (cell.orbs === capacity - 1) {
-    score += 50; // One away from explosion
+    score += 50;
   } else if (cell.orbs === capacity - 2) {
-    score += 25; // Two away
+    score += 25;
   }
 
-  // Score for capturing opponent cells
   if (cell.ownerId === null) {
-    // Check if this move would capture opponent cells when it explodes
     const neighbors = getNeighbors(row, col, game.rows, game.cols);
     let opponentCells = 0;
     let ownCells = 0;
@@ -352,35 +381,19 @@ const scoreMove = (
     score += ownCells * 10;
   }
 
-  // Penalty for placing in own cell that's close to explosion (risky)
   if (cell.ownerId === playerId && cell.orbs === capacity) {
-    score -= 20; // Already at capacity, will explode
+    score -= 20;
   }
 
-  // Corner cells are easier to fill (capacity 1)
-  if (capacity === 1) {
-    score += 15; // Quick explosion
-  }
+  if (capacity === 1) score += 15;
+  if (capacity === 2) score += 8;
 
-  // Edge cells are second easiest (capacity 2)
-  if (capacity === 2) {
-    score += 8;
-  }
-
-  // Difficulty adjustments
-  if (difficulty === "easy") {
-    // Easy AI: add random factor
-    score += Math.random() * 40;
-  } else if (difficulty === "medium") {
-    // Medium AI: slight randomness
-    score += Math.random() * 15;
-  }
-  // Hard AI: no randomness, pure strategy
+  if (difficulty === "easy") score += Math.random() * 40;
+  else if (difficulty === "medium") score += Math.random() * 15;
 
   return score;
 };
 
-// Get the best move for the AI
 export const getAIMove = (
   game: GameState,
   playerId: string,
@@ -402,27 +415,22 @@ export const getAIMove = (
 
   if (validMoves.length === 0) return null;
 
-  // Sort by score (highest first)
   validMoves.sort((a, b) => b.score - a.score);
 
-  // For easy difficulty, sometimes pick a random valid move
   if (difficulty === "easy" && Math.random() < 0.3) {
-    const randomIndex = Math.floor(Math.random() * validMoves.length);
-    return { row: validMoves[randomIndex].row, col: validMoves[randomIndex].col };
+    const idx = Math.floor(Math.random() * validMoves.length);
+    return { row: validMoves[idx].row, col: validMoves[idx].col };
   }
 
-  // For medium, sometimes pick from top 3
   if (difficulty === "medium" && Math.random() < 0.2) {
     const topMoves = validMoves.slice(0, Math.min(3, validMoves.length));
-    const randomIndex = Math.floor(Math.random() * topMoves.length);
-    return { row: topMoves[randomIndex].row, col: topMoves[randomIndex].col };
+    const idx = Math.floor(Math.random() * topMoves.length);
+    return { row: topMoves[idx].row, col: topMoves[idx].col };
   }
 
-  // Pick the best move
   return { row: validMoves[0].row, col: validMoves[0].col };
 };
 
-// Check if a player is an AI
 export const isAI = (playerId: string): boolean => {
   return playerId.startsWith("ai-");
 };

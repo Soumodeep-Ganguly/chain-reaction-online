@@ -20,6 +20,19 @@ export interface TurnEvent {
   chainReactionStep?: number;
 }
 
+// Snapshot of a single cell for animation playback
+export interface CellSnapshot {
+  orbs: number;
+  ownerId: string | null;
+  animating?: "explode" | "capture" | "arrive" | "place";
+}
+
+// A board snapshot at a point in the chain reaction
+export interface BoardSnapshot {
+  board: CellSnapshot[][];
+  changedCells: string[]; // "row-col" keys of cells that changed
+}
+
 export interface GameState {
   roomId: string;
   players: Player[];
@@ -32,6 +45,7 @@ export interface GameState {
   started: boolean;
   winner?: Player;
   turnEvents: TurnEvent[];
+  boardSnapshots?: BoardSnapshot[];
   roundNumber: number;
 }
 

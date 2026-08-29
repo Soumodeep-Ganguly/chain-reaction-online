@@ -1,12 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { GameBoard } from "@/components/game-board";
+import { AnimationPlayer } from "@/components/animation-player";
 import { PlayerIndicator } from "@/components/player-indicator";
 import { GameControls } from "@/components/game-controls";
 import { toast } from "sonner";
-import {
-  GameState,
-  TurnEvent,
-} from "@/types/game";
+import { GameState, BoardSnapshot } from "@/types/game";
 import { AskReplay } from "./ask-replay";
 import { OfflineGameConfig } from "./offline-setup-view";
 import {
@@ -29,19 +26,22 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
   const [isMuted, setIsMuted] = useState(false);
   const [winnerSelected, setWinnerSelected] = useState(false);
   const [exitGame, setExitGame] = useState(false);
-  const [animatingCells, setAnimatingCells] = useState<Map<string, string>>(
-    new Map()
-  );
   const [eventLog, setEventLog] = useState<string[]>([]);
   const [aiThinking, setAiThinking] = useState(false);
+  const [isAnimating, setIsAnimating] = useState(false);
+  const [currentSnapshots, setCurrentSnapshots] = useState<BoardSnapshot[]>([]);
 
   const aiTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const animatingRef = useRef(false);
+  const pendingStateRef = useRef<GameState | null>(null);
+  const initializedRef = useRef(false);
 
   const isVsCPU = config.mode === "vs-cpu";
 
-  // Initialize game
+  // Initialize game (only once)
   useEffect(() => {
+    if (initializedRef.current) return;
+    initializedRef.current = true;
+
     const game = createOfflineGame(
       config.rows,
       config.cols,
@@ -51,72 +51,81 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
     );
     setGameState(game);
     toast.success("Game started!");
-  }, [config]);
+  }, []);
 
-  // Process turn events for animation
-  const processTurnEvents = useCallback(
-    (events: TurnEvent[]) => {
-      if (!events || events.length === 0) return;
+  // Handle animation completion
+  const handleAnimationComplete = useCallback(() => {
+    setIsAnimating(false);
+    setCurrentSnapshots([]);
 
-      const newAnimating = new Map<string, string>();
-      const logs: string[] = [];
+    if (pendingStateRef.current) {
+      const finalState = pendingStateRef.current;
+      setGameState(finalState);
+      pendingStateRef.current = null;
 
-      events.forEach((event) => {
-        if (
-          event.type === "explosion" &&
-          event.row !== undefined &&
-          event.col !== undefined
-        ) {
-          const key = `${event.row}-${event.col}`;
-          newAnimating.set(key, "explosion");
-          logs.push(
-            `💥 ${event.playerName || "Player"}'s cell exploded!`
-          );
-        } else if (
-          event.type === "capture" &&
-          event.row !== undefined &&
-          event.col !== undefined
-        ) {
-          const key = `${event.row}-${event.col}`;
-          newAnimating.set(key, "capture");
-          logs.push(
-            `⚡ ${event.playerName || "Player"} captured a cell!`
-          );
-        } else if (event.type === "elimination") {
-          logs.push(
-            `❌ ${event.playerName || "Player"} has been eliminated!`
-          );
-        } else if (event.type === "win") {
-          logs.push(
-            `🏆 ${event.playerName || "Player"} wins the game!`
-          );
+      // Process events for log
+      if (finalState.turnEvents && finalState.turnEvents.length > 0) {
+        const logs: string[] = [];
+        finalState.turnEvents.forEach((event) => {
+          if (event.type === "capture") {
+            logs.push(`⚡ ${event.playerName || "Player"} captured a cell!`);
+          } else if (event.type === "elimination") {
+            logs.push(`❌ ${event.playerName || "Player"} has been eliminated!`);
+          } else if (event.type === "win") {
+            logs.push(`🏆 ${event.playerName || "Player"} wins the game!`);
+          }
+        });
+        setEventLog((prev) => [...prev.slice(-10), ...logs]);
+      }
+
+      if (finalState.winner) {
+        toast.success(`${finalState.winner.name} wins the game!`);
+        setWinnerSelected(true);
+      }
+    }
+  }, []);
+
+  // Start animation for a move
+  const startAnimation = useCallback(
+    (newState: GameState, preMoveState: GameState) => {
+      if (newState.boardSnapshots && newState.boardSnapshots.length > 1) {
+        // Has chain reactions - animate them
+        pendingStateRef.current = newState;
+        // Start from the pre-move board so the orb placement is also animated
+        const startSnapshots: BoardSnapshot[] = [
+          {
+            board: preMoveState.board.map((row) =>
+              row.map((cell) => ({ ...cell }))
+            ),
+            changedCells: [],
+          },
+          ...newState.boardSnapshots.slice(1), // Skip the first snapshot (pre-place)
+        ];
+        setCurrentSnapshots(startSnapshots);
+        setIsAnimating(true);
+      } else {
+        // No chain reactions - just apply the state directly
+        setGameState(newState);
+        if (newState.winner) {
+          toast.success(`${newState.winner.name} wins the game!`);
+          setWinnerSelected(true);
         }
-      });
-
-      setAnimatingCells(newAnimating);
-      setEventLog((prev) => [...prev.slice(-10), ...logs]);
-
-      // Clear animations after delay
-      setTimeout(() => {
-        setAnimatingCells(new Map());
-      }, 1000);
+      }
     },
     []
   );
 
   // Handle AI moves
   useEffect(() => {
-    if (!gameState || winnerSelected || animatingRef.current) return;
+    if (!gameState || winnerSelected || isAnimating) return;
 
     const currentPlayer = gameState.players[gameState.currentPlayerIndex];
     if (!currentPlayer || !currentPlayer.active) return;
 
-    // Check if it's AI's turn
     if (isAI(currentPlayer.id)) {
       setAiThinking(true);
       const difficulty = config.aiDifficulty;
 
-      // Add delay for AI thinking
       aiTimeoutRef.current = setTimeout(() => {
         const move = getAIMove(gameState, currentPlayer.id, difficulty);
 
@@ -129,25 +138,13 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
           );
 
           if (newState) {
-            setGameState(newState);
-
-            if (newState.turnEvents && newState.turnEvents.length > 0) {
-              processTurnEvents(newState.turnEvents);
-            }
-
-            if (newState.winner) {
-              toast.success(
-                `${newState.winner.name} wins the game!`
-              );
-              setWinnerSelected(true);
-            }
+            startAnimation(newState, gameState);
           }
         }
 
         setAiThinking(false);
-      }, 500 + Math.random() * 500); // 500-1000ms delay
+      }, 500 + Math.random() * 500);
     } else {
-      // Human player's turn
       setIsCurrentPlayerTurn(true);
     }
 
@@ -156,7 +153,7 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
         clearTimeout(aiTimeoutRef.current);
       }
     };
-  }, [gameState, winnerSelected, config.aiDifficulty, processTurnEvents]);
+  }, [gameState, winnerSelected, isAnimating, config.aiDifficulty, startAnimation]);
 
   // Update current player turn status
   useEffect(() => {
@@ -166,31 +163,20 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
     }
 
     const currentPlayer = gameState.players[gameState.currentPlayerIndex];
-    // Allow any human player to play their turn (not just human-0)
     setIsCurrentPlayerTurn(
-      currentPlayer && !currentPlayer.id.startsWith("ai-") && !winnerSelected
+      currentPlayer && !currentPlayer.id.startsWith("ai-") && !winnerSelected && !isAnimating
     );
-  }, [gameState, winnerSelected]);
+  }, [gameState, winnerSelected, isAnimating]);
 
   const handleCellClick = (row: number, col: number) => {
-    if (!isCurrentPlayerTurn || !gameState || aiThinking) return;
+    if (!isCurrentPlayerTurn || !gameState || aiThinking || isAnimating) return;
 
-    // Get the current player's ID (could be any human in local multiplayer)
     const currentPlayer = gameState.players[gameState.currentPlayerIndex];
     if (!currentPlayer || currentPlayer.id.startsWith("ai-")) return;
 
     const newState = placeOrbLocal(gameState, currentPlayer.id, row, col);
     if (newState) {
-      setGameState(newState);
-
-      if (newState.turnEvents && newState.turnEvents.length > 0) {
-        processTurnEvents(newState.turnEvents);
-      }
-
-      if (newState.winner) {
-        toast.success(`${newState.winner.name} wins the game!`);
-        setWinnerSelected(true);
-      }
+      startAnimation(newState, gameState);
     } else {
       toast.error("Invalid move!");
     }
@@ -209,7 +195,8 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
     setGameState(game);
     setWinnerSelected(false);
     setEventLog([]);
-    setAnimatingCells(new Map());
+    setIsAnimating(false);
+    setCurrentSnapshots([]);
     toast.success("New game started!");
   };
 
@@ -219,20 +206,17 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
 
   if (!gameState) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-emerald-600 via-teal-500 to-cyan-500">
+      <div className="min-h-dvh flex items-center justify-center bg-gradient-to-b from-emerald-600 via-teal-500 to-cyan-500">
         <div className="text-white text-2xl">Loading game...</div>
       </div>
     );
   }
 
-  // Determine who is "you" (the first human player)
-  const humanPlayers = gameState.players.filter(
-    (p) => !p.id.startsWith("ai-")
-  );
+  const humanPlayers = gameState.players.filter((p) => !p.id.startsWith("ai-"));
   const aiPlayers = gameState.players.filter((p) => p.id.startsWith("ai-"));
 
   return (
-    <div className="min-h-screen flex flex-col bg-gradient-to-b from-emerald-600 via-teal-500 to-cyan-500">
+    <div className="min-h-dvh flex flex-col bg-gradient-to-b from-emerald-600 via-teal-500 to-cyan-500">
       {/* Winner overlay */}
       {winnerSelected && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -264,8 +248,7 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
       )}
 
       {/* Top section - opponents */}
-      <div className="flex justify-center p-4 gap-3 flex-wrap">
-        {/* In vs CPU mode, show the AI at top */}
+      <div className="flex justify-center p-2 md:p-4 gap-2 md:gap-3 flex-wrap">
         {isVsCPU &&
           aiPlayers.map((player) => (
             <PlayerIndicator
@@ -274,19 +257,14 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
               orbCount={countPlayerOrbs(gameState.board, player.id)}
               cellCount={countPlayerCells(gameState.board, player.id)}
               isActive={
-                player.id ===
-                gameState.players[gameState.currentPlayerIndex]?.id
+                player.id === gameState.players[gameState.currentPlayerIndex]?.id
               }
             />
           ))}
 
-        {/* In vs Humans mode, show other humans at top (not the current turn player) */}
         {!isVsCPU &&
           humanPlayers
-            .filter(
-              (p) =>
-                p.id !== gameState.players[gameState.currentPlayerIndex]?.id
-            )
+            .filter((p) => p.id !== gameState.players[gameState.currentPlayerIndex]?.id)
             .map((player) => (
               <PlayerIndicator
                 key={player.id}
@@ -294,22 +272,19 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
                 orbCount={countPlayerOrbs(gameState.board, player.id)}
                 cellCount={countPlayerCells(gameState.board, player.id)}
                 isActive={
-                  player.id ===
-                  gameState.players[gameState.currentPlayerIndex]?.id
+                  player.id === gameState.players[gameState.currentPlayerIndex]?.id
                 }
               />
             ))}
       </div>
 
       {/* Middle section - board */}
-      <div className="flex-1 flex flex-col items-center justify-center p-4">
+      <div className="flex-1 flex flex-col items-center justify-center p-2 md:p-4">
         {/* Turn indicator */}
         {!winnerSelected && (
-          <div className="mb-4 text-white text-xl font-bold">
+          <div className="mb-2 md:mb-4 text-white text-lg md:text-xl font-bold">
             {aiThinking && (
-              <span className="animate-pulse">
-                🤖 AI is thinking...
-              </span>
+              <span className="animate-pulse">🤖 AI is thinking...</span>
             )}
             {!aiThinking && isCurrentPlayerTurn && isVsCPU && (
               <span>Your Turn - Place an Orb!</span>
@@ -320,42 +295,42 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
                 Turn - Place an Orb!
               </span>
             )}
-            {!aiThinking &&
-              !isCurrentPlayerTurn &&
-              gameState.players[gameState.currentPlayerIndex] && (
-                <span>
-                  {gameState.players[gameState.currentPlayerIndex].name}'s
-                  turn
-                </span>
-              )}
+            {!aiThinking && !isCurrentPlayerTurn && gameState.players[gameState.currentPlayerIndex] && (
+              <span>
+                {gameState.players[gameState.currentPlayerIndex].name}'s turn
+              </span>
+            )}
           </div>
         )}
 
-        {/* Board */}
-        <div className="mb-4">
-          <GameBoard
-            board={gameState.board}
-            rows={gameState.rows}
-            cols={gameState.cols}
-            isCurrentPlayerTurn={isCurrentPlayerTurn && !aiThinking}
-            currentPlayerId={
-              gameState.players[gameState.currentPlayerIndex]?.id || ""
-            }
-            players={gameState.players}
-            onCellClick={handleCellClick}
-            animatingCells={animatingCells}
-          />
+        {/* Board with animation */}
+        <div className="mb-2 md:mb-4">
+          {isAnimating && currentSnapshots.length > 0 ? (
+            <AnimationPlayer
+              boardSnapshots={currentSnapshots}
+              rows={gameState.rows}
+              cols={gameState.cols}
+              players={gameState.players}
+              onSnapshotComplete={handleAnimationComplete}
+            />
+          ) : (
+            <StaticBoard
+              board={gameState.board}
+              rows={gameState.rows}
+              cols={gameState.cols}
+              players={gameState.players}
+              onCellClick={handleCellClick}
+              isCurrentPlayerTurn={isCurrentPlayerTurn && !aiThinking && !isAnimating}
+            />
+          )}
         </div>
 
         {/* Event log */}
         {eventLog.length > 0 && (
-          <div className="w-full max-w-md mb-4">
-            <div className="bg-black/20 backdrop-blur-sm rounded-lg p-2 max-h-24 overflow-y-auto">
+          <div className="w-full max-w-md mb-2 md:mb-4">
+            <div className="bg-black/20 backdrop-blur-sm rounded-lg p-2 max-h-20 md:max-h-24 overflow-y-auto">
               {eventLog.slice(-5).map((log, i) => (
-                <div
-                  key={i}
-                  className="text-white text-xs py-0.5 opacity-80"
-                >
+                <div key={i} className="text-white text-xs py-0.5 opacity-80">
                   {log}
                 </div>
               ))}
@@ -366,7 +341,7 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
         {/* Game controls */}
         <div className="w-full max-w-md mx-auto">
           <GameControls
-            isPlayerTurn={isCurrentPlayerTurn && !aiThinking}
+            isPlayerTurn={isCurrentPlayerTurn && !aiThinking && !isAnimating}
             onExitGame={() => setExitGame(true)}
             muteControl={muteControl}
             isMuted={isMuted}
@@ -375,49 +350,31 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
       </div>
 
       {/* Bottom section - your info */}
-      <div className="p-4 bg-black/20 backdrop-blur-sm">
-        <div className="flex justify-center items-center gap-4">
+      <div className="p-2 md:p-4 bg-black/20 backdrop-blur-sm">
+        <div className="flex justify-center items-center gap-2 md:gap-4 flex-wrap">
           {humanPlayers.map((player) => {
             const isCurrentTurn =
-              player.id ===
-              gameState.players[gameState.currentPlayerIndex]?.id;
+              player.id === gameState.players[gameState.currentPlayerIndex]?.id;
             return (
               <div
                 key={player.id}
-                className={`flex items-center gap-2 ${
-                  isCurrentTurn
-                    ? "ring-2 ring-white rounded-lg p-2"
-                    : "opacity-70"
+                className={`flex items-center gap-1.5 md:gap-2 text-xs md:text-sm ${
+                  isCurrentTurn ? "ring-2 ring-white rounded-lg p-1.5 md:p-2" : "opacity-70"
                 }`}
               >
                 <div
-                  className="w-5 h-5 rounded-full"
-                  style={{
-                    backgroundColor: player.color || "#6b7280",
-                  }}
+                  className="w-4 h-4 md:w-5 md:h-5 rounded-full"
+                  style={{ backgroundColor: player.color || "#6b7280" }}
                 />
                 <span className="text-white font-bold">
                   {player.name}
-                  {!isVsCPU && isCurrentTurn && (
-                    <span className="text-yellow-300 text-xs ml-1">
-                      ◀ YOUR TURN
-                    </span>
-                  )}
-                  {isVsCPU && (
-                    <span className="text-gray-300 text-xs ml-1">(You)</span>
-                  )}
+                  {isVsCPU && <span className="text-gray-300 ml-1">(You)</span>}
                 </span>
-                <div className="text-white text-sm">
-                  Orbs:{" "}
-                  <span className="font-bold">
-                    {countPlayerOrbs(gameState.board, player.id)}
-                  </span>
+                <div className="text-white">
+                  Orbs: <span className="font-bold">{countPlayerOrbs(gameState.board, player.id)}</span>
                 </div>
-                <div className="text-white text-sm">
-                  Cells:{" "}
-                  <span className="font-bold">
-                    {countPlayerCells(gameState.board, player.id)}
-                  </span>
+                <div className="text-white">
+                  Cells: <span className="font-bold">{countPlayerCells(gameState.board, player.id)}</span>
                 </div>
               </div>
             );
@@ -426,4 +383,108 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
       </div>
     </div>
   );
+}
+
+// Static board component (no animation)
+function StaticBoard({
+  board,
+  rows,
+  cols,
+  players,
+  onCellClick,
+  isCurrentPlayerTurn,
+}: {
+  board: any[][];
+  rows: number;
+  cols: number;
+  players: any[];
+  onCellClick: (row: number, col: number) => void;
+  isCurrentPlayerTurn: boolean;
+}) {
+  const getCellCapacityLocal = (row: number, col: number): number => {
+    const isTop = row === 0;
+    const isBottom = row === rows - 1;
+    const isLeft = col === 0;
+    const isRight = col === cols - 1;
+    const adjacentCount =
+      (isTop ? 0 : 1) + (isBottom ? 0 : 1) + (isLeft ? 0 : 1) + (isRight ? 0 : 1);
+    return adjacentCount - 1;
+  };
+
+  const getPlayerColor = (playerId: string): string => {
+    return players.find((p: any) => p.id === playerId)?.color || "#6b7280";
+  };
+
+  const getCellSize = () => {
+    if (cols <= 4) return "w-16 h-16 md:w-20 md:h-20";
+    if (cols <= 6) return "w-12 h-12 md:w-16 md:h-16";
+    if (cols <= 8) return "w-10 h-10 md:w-14 md:h-14";
+    return "w-8 h-8 md:w-12 md:h-12";
+  };
+
+  const cellSizeClass = getCellSize();
+
+  return (
+    <div className="flex flex-col items-center gap-0.5">
+      {board.map((row: any[], rowIndex: number) => (
+        <div key={rowIndex} className="flex gap-0.5">
+          {row.map((cell: any, colIndex: number) => {
+            const capacity = getCellCapacityLocal(rowIndex, colIndex);
+            const ownerColor = cell.ownerId ? getPlayerColor(cell.ownerId) : null;
+            const isClickable =
+              isCurrentPlayerTurn &&
+              (cell.ownerId === null || cell.ownerId === "human-0");
+            const isAboutToExplode = cell.orbs >= capacity && cell.orbs > 0;
+
+            return (
+              <div
+                key={`${rowIndex}-${colIndex}`}
+                className={`relative ${cellSizeClass} border-2 rounded-lg flex items-center justify-center transition-all duration-150 ${
+                  isClickable ? "cursor-pointer hover:scale-105 hover:shadow-lg active:scale-95" : "cursor-default"
+                } ${isAboutToExplode ? "ring-2 ring-white/60" : ""}`}
+                style={{
+                  backgroundColor: ownerColor ? `${ownerColor}30` : "rgba(255, 255, 255, 0.1)",
+                  borderColor: ownerColor ? `${ownerColor}60` : "rgba(255, 255, 255, 0.2)",
+                }}
+                onClick={isClickable ? () => onCellClick(rowIndex, colIndex) : undefined}
+              >
+                {cell.orbs > 0 && (
+                  <div className="relative w-full h-full">
+                    {getOrbPositions(cell.orbs, capacity).map((pos, i) => (
+                      <div
+                        key={i}
+                        className="absolute w-2.5 h-2.5 md:w-3 md:h-3 rounded-full"
+                        style={{
+                          backgroundColor: ownerColor || "#6b7280",
+                          left: pos.x,
+                          top: pos.y,
+                          transform: "translate(-50%, -50%)",
+                          boxShadow: `0 1px 3px ${ownerColor || "#6b7280"}60`,
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function getOrbPositions(count: number, capacity: number): { x: string; y: string }[] {
+  const positions: { x: string; y: string }[] = [];
+  if (capacity === 1) {
+    positions.push({ x: "50%", y: "50%" });
+  } else if (capacity === 2) {
+    if (count >= 1) positions.push({ x: "33%", y: "50%" });
+    if (count >= 2) positions.push({ x: "67%", y: "50%" });
+  } else {
+    if (count >= 1) positions.push({ x: "50%", y: "30%" });
+    if (count >= 2) positions.push({ x: "30%", y: "70%" });
+    if (count >= 3) positions.push({ x: "70%", y: "70%" });
+  }
+  return positions;
 }
