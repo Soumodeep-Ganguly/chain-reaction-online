@@ -4,10 +4,11 @@ import { PlayerIndicator } from "@/components/player-indicator";
 import { GameControls } from "@/components/game-controls";
 import { toast } from "sonner";
 import socket from "@/lib/socket";
-import { GameState, Player, AnimationFrame, FlyingOrb } from "@/types/game";
+import { GameState, Player, AnimationFrame } from "@/types/game";
 import { AskReplay } from "./ask-replay";
 import { useAuth } from "@/lib/auth-context";
 import { countPlayerOrbs, countPlayerCells } from "@/lib/game-helpers";
+import { generateAnimationSequence } from "@/lib/ai-game";
 
 interface GameViewProps {
   onNavigate: (
@@ -15,87 +16,6 @@ interface GameViewProps {
   ) => void;
   playerName: string;
   roomId: string;
-}
-
-// Generate animation frames from board diff (before -> after)
-function generateFramesFromDiff(
-  beforeBoard: { orbs: number; ownerId: string | null }[][],
-  afterBoard: { orbs: number; ownerId: string | null }[][],
-  rows: number,
-  cols: number
-): AnimationFrame[] {
-  const frames: AnimationFrame[] = [];
-
-  // Find cells that changed
-  const changedCells: { row: number; col: number; before: { orbs: number; ownerId: string | null }; after: { orbs: number; ownerId: string | null } }[] = [];
-
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const b = beforeBoard[r][c];
-      const a = afterBoard[r][c];
-      if (b.orbs !== a.orbs || b.ownerId !== a.ownerId) {
-        changedCells.push({ row: r, col: c, before: b, after: a });
-      }
-    }
-  }
-
-  if (changedCells.length === 0) return frames;
-
-  // Simple approach: show the change as a single frame
-  // Find which cells exploded (had orbs, now empty)
-  const explodingCells: { row: number; col: number; playerId: string }[] = [];
-  const arrivedCells: { row: number; col: number; playerId: string; orbCount: number }[] = [];
-  const flyingOrbs: FlyingOrb[] = [];
-
-  for (const change of changedCells) {
-    if (change.after.orbs > change.before.orbs && change.after.ownerId) {
-      // Cell gained orbs - it's an arrival
-      arrivedCells.push({
-        row: change.row,
-        col: change.col,
-        playerId: change.after.ownerId,
-        orbCount: change.after.orbs,
-      });
-    } else if (change.before.orbs > 0 && change.after.orbs === 0) {
-      // Cell had orbs, now empty - it exploded
-      if (change.before.ownerId) {
-        explodingCells.push({
-          row: change.row,
-          col: change.col,
-          playerId: change.before.ownerId,
-        });
-      }
-    } else if (change.after.orbs > 0 && change.after.ownerId) {
-      // Cell changed orbs/owner
-      arrivedCells.push({
-        row: change.row,
-        col: change.col,
-        playerId: change.after.ownerId,
-        orbCount: change.after.orbs,
-      });
-    }
-  }
-
-  // Create frames: first arrivals, then if there were explosions, show them
-  if (arrivedCells.length > 0) {
-    frames.push({
-      explodingCells: [],
-      flyingOrbs: [],
-      arrivedCells,
-      capturedCells: [],
-    });
-  }
-
-  if (explodingCells.length > 0) {
-    frames.push({
-      explodingCells,
-      flyingOrbs,
-      arrivedCells: [],
-      capturedCells: [],
-    });
-  }
-
-  return frames;
 }
 
 export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
@@ -112,7 +32,7 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
   const { uuid } = useAuth();
   const joinedRef = useRef(false);
   const firstConnectRef = useRef(true);
-  const prevBoardRef = useRef<string>("");
+  const prevBoardRef = useRef<{ orbs: number; ownerId: string | null }[][] | null>(null);
   const pendingStateRef = useRef<GameState | null>(null);
 
   // Handle animation completion
@@ -122,6 +42,7 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
 
     if (pendingStateRef.current) {
       const finalState = pendingStateRef.current;
+      prevBoardRef.current = finalState.board.map(r => r.map(c => ({ ...c })));
       setGameState(finalState);
       pendingStateRef.current = null;
 
@@ -147,6 +68,43 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
     }
   }, []);
 
+  // Simulate chain reaction locally to get animation frames
+  const simulateChainReaction = useCallback((
+    beforeBoard: { orbs: number; ownerId: string | null }[][],
+    rows: number,
+    cols: number,
+    players: { id: string; color: string }[],
+    turnEvents: any[]
+  ): { frames: AnimationFrame[]; preBoard: { orbs: number; ownerId: string | null }[][] } | null => {
+    // Find the placed cell from turnEvents (the server sends this info)
+    const placeEvent = turnEvents.find((e: any) => e.type === "place");
+    if (!placeEvent || placeEvent.row === undefined || placeEvent.col === undefined) return null;
+
+    const placedRow = placeEvent.row;
+    const placedCol = placeEvent.col;
+    const placedPlayerId = placeEvent.playerId || "";
+
+    const getPlayerColor = (id: string): string => {
+      return players.find((p) => p.id === id)?.color || "#6b7280";
+    };
+
+    // Run the same animation sequence logic as offline
+    const sequence = generateAnimationSequence(
+      beforeBoard,
+      rows,
+      cols,
+      placedRow,
+      placedCol,
+      placedPlayerId,
+      getPlayerColor
+    );
+
+    return {
+      frames: sequence.frames,
+      preBoard: beforeBoard,
+    };
+  }, []);
+
   useEffect(() => {
     socket.emit("join-room", { roomId, playerName, uuid });
     joinedRef.current = true;
@@ -165,42 +123,37 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
     socket.on("game-started", (state: GameState) => {
       setGameState(state);
       setEventLog([]);
-      prevBoardRef.current = JSON.stringify(state.board);
+      prevBoardRef.current = state.board.map(r => r.map(c => ({ ...c })));
       toast.success("Game started!");
     });
 
     socket.on("game-updated", (state: GameState) => {
       if (isAnimating) {
-        // Queue the state update for after animation completes
         pendingStateRef.current = state;
         return;
       }
 
-      // Generate animation frames from board diff
-      if (state.board && prevBoardRef.current) {
-        try {
-          const prevBoard = JSON.parse(prevBoardRef.current);
-          const frames = generateFramesFromDiff(
-            prevBoard,
-            state.board,
-            state.rows,
-            state.cols
-          );
+      // Simulate chain reaction locally to generate animation frames
+      if (state.board && prevBoardRef.current && state.players && state.turnEvents) {
+        const result = simulateChainReaction(
+          prevBoardRef.current,
+          state.rows,
+          state.cols,
+          state.players.map(p => ({ id: p.id, color: p.color })),
+          state.turnEvents
+        );
 
-          if (frames.length > 0) {
-            pendingStateRef.current = state;
-            setPreAnimationBoard(prevBoard);
-            setAnimationFrames(frames);
-            setIsAnimating(true);
-            prevBoardRef.current = JSON.stringify(state.board);
-            return;
-          }
-        } catch {
-          // ignore parse errors
+        if (result && result.frames.length > 1) {
+          pendingStateRef.current = state;
+          setPreAnimationBoard(result.preBoard);
+          setAnimationFrames(result.frames);
+          setIsAnimating(true);
+          return;
         }
       }
 
-      prevBoardRef.current = JSON.stringify(state.board);
+      // No animation needed, just update state
+      prevBoardRef.current = state.board.map(r => r.map(c => ({ ...c })));
       setGameState(state);
 
       if (!state.winner) setWinnerSelected(false);
@@ -258,7 +211,7 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
       socket.off("invalid-move");
       socket.off("game-over");
     };
-  }, [roomId, playerName, gameState, isAnimating, onNavigate]);
+  }, [roomId, playerName, gameState, isAnimating, onNavigate, simulateChainReaction]);
 
   useEffect(() => {
     if (gameState) {
@@ -297,7 +250,6 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
     );
   }
 
-  // Calculate cell size
   const getCellSize = () => {
     if (gameState.cols <= 4) return "w-16 h-16 md:w-20 md:h-20";
     if (gameState.cols <= 6) return "w-12 h-12 md:w-16 md:h-16";
@@ -319,7 +271,6 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
 
   return (
     <div className="min-h-dvh flex flex-col bg-gradient-to-b from-emerald-600 via-teal-500 to-cyan-500">
-      {/* Winner overlay */}
       {gameState?.players.length > 1 &&
         gameState?.players[0].id === socket.id &&
         winnerSelected && (
@@ -334,7 +285,6 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
           </div>
         )}
 
-      {/* Exit game overlay */}
       {exitGame && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <AskReplay
@@ -350,7 +300,6 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
         </div>
       )}
 
-      {/* Top section - other players */}
       <div className="flex justify-center p-2 md:p-4 gap-2 md:gap-3 flex-wrap">
         {gameState.players
           .filter((p) => p.id !== socket.id)
@@ -368,9 +317,7 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
           ))}
       </div>
 
-      {/* Middle section - board */}
       <div className="flex-1 flex flex-col items-center justify-center p-2 md:p-4">
-        {/* Turn indicator */}
         {!winnerSelected && (
           <div className="mb-2 md:mb-4 text-white text-lg md:text-xl font-bold">
             {isAnimating && <span className="animate-pulse">⚡ Chain reaction...</span>}
@@ -381,7 +328,6 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
           </div>
         )}
 
-        {/* Board with animation */}
         <div className="mb-2 md:mb-4">
           {isAnimating && animationFrames.length > 0 ? (
             <AnimationPlayer
@@ -443,7 +389,6 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
           )}
         </div>
 
-        {/* Event log */}
         {eventLog.length > 0 && (
           <div className="w-full max-w-md mb-2 md:mb-4">
             <div className="bg-black/20 backdrop-blur-sm rounded-lg p-2 max-h-20 md:max-h-24 overflow-y-auto">
@@ -456,7 +401,6 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
           </div>
         )}
 
-        {/* Game controls */}
         <div className="w-full max-w-md mx-auto">
           <GameControls
             isPlayerTurn={isCurrentPlayer && !isAnimating}
@@ -467,7 +411,6 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
         </div>
       </div>
 
-      {/* Bottom section - current player info */}
       <div className="p-2 md:p-4 bg-black/20 backdrop-blur-sm">
         <div className="flex justify-center items-center gap-2 md:gap-4">
           <div className="flex items-center gap-1.5 md:gap-2">
