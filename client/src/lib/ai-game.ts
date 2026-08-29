@@ -1,4 +1,4 @@
-import { Cell, GameState, Player, BoardSnapshot, CellSnapshot, PLAYER_COLORS } from "@/types/game";
+import { Cell, GameState, Player, AnimationSequence, AnimationFrame, FlyingOrb, PLAYER_COLORS } from "@/types/game";
 
 // Get the capacity of a cell based on its position
 export const getCellCapacity = (
@@ -52,59 +52,37 @@ const cloneBoard = (board: Cell[][]): Cell[][] => {
   return board.map((row) => row.map((cell) => ({ ...cell })));
 };
 
-// Create a board snapshot from a board state
-const createSnapshot = (
-  board: Cell[][],
-  changedCells: string[] = []
-): CellSnapshot[][] => {
-  return board.map((row, r) =>
-    row.map((cell, c) => {
-      const key = `${r}-${c}`;
-      const isChanged = changedCells.includes(key);
-      return {
-        orbs: cell.orbs,
-        ownerId: cell.ownerId,
-        animating: isChanged ? undefined : undefined, // Will be set by caller
-      };
-    })
-  );
-};
-
-// Generate board snapshots for chain reaction animation
-const generateSnapshots = (
+// Generate animation sequence for a move
+export const generateAnimationSequence = (
   board: Cell[][],
   rows: number,
   cols: number,
   placeRow: number,
   placeCol: number,
-  playerId: string
-): BoardSnapshot[] => {
-  const snapshots: BoardSnapshot[] = [];
+  playerId: string,
+  getPlayerColor: (id: string) => string
+): AnimationSequence => {
+  const frames: AnimationFrame[] = [];
   const workingBoard = cloneBoard(board);
 
-  // Snapshot 1: Before place (empty cell or existing orbs)
-  snapshots.push({
-    board: createSnapshot(workingBoard, []),
-    changedCells: [],
-  });
-
-  // Place the orb
+  // Frame 1: Place the orb
   workingBoard[placeRow][placeCol].orbs += 1;
   workingBoard[placeRow][placeCol].ownerId = playerId;
 
-  // Snapshot 2: After placing orb
-  snapshots.push({
-    board: createSnapshot(workingBoard, [`${placeRow}-${placeCol}`]),
-    changedCells: [`${placeRow}-${placeCol}`],
+  frames.push({
+    explodingCells: [],
+    flyingOrbs: [],
+    arrivedCells: [{ row: placeRow, col: placeCol, playerId, orbCount: workingBoard[placeRow][placeCol].orbs }],
+    capturedCells: [],
   });
 
-  // Process chain reactions, capturing snapshots at each step
+  // Process chain reactions
   let step = 0;
   const maxSteps = rows * cols * 4;
 
   while (step < maxSteps) {
-    let foundExplosion = false;
-    const changedInStep: string[] = [];
+    // Find all cells that need to explode in this step
+    const cellsToExplode: { row: number; col: number; playerId: string }[] = [];
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
@@ -113,39 +91,75 @@ const generateSnapshots = (
 
         const capacity = getCellCapacity(r, c, rows, cols);
         if (cell.orbs > capacity) {
-          foundExplosion = true;
-          const explodingPlayer = cell.ownerId;
-
-          // Mark explosion
-          changedInStep.push(`${r}-${c}`);
-
-          // Clear the exploding cell
-          cell.orbs = 0;
-          cell.ownerId = null;
-
-          // Send orbs to neighbors
-          const neighbors = getNeighbors(r, c, rows, cols);
-          for (const [nr, nc] of neighbors) {
-            workingBoard[nr][nc].orbs += 1;
-            workingBoard[nr][nc].ownerId = explodingPlayer;
-            changedInStep.push(`${nr}-${nc}`);
-          }
+          cellsToExplode.push({ row: r, col: c, playerId: cell.ownerId });
         }
       }
     }
 
-    if (!foundExplosion) break;
+    if (cellsToExplode.length === 0) break;
 
-    // Snapshot for this chain reaction step
-    snapshots.push({
-      board: createSnapshot(workingBoard, changedInStep),
-      changedCells: [...changedInStep],
+    // Frame: Show cells exploding
+    const flyingOrbs: FlyingOrb[] = [];
+    const arrivedCells: { row: number; col: number; playerId: string; orbCount: number }[] = [];
+    const capturedCells: { row: number; col: number; playerId: string }[] = [];
+
+    for (const exploding of cellsToExplode) {
+      const { row: r, col: c, playerId: explodingPlayer } = exploding;
+      const color = getPlayerColor(explodingPlayer);
+
+      // Remove orbs from exploding cell
+      workingBoard[r][c].orbs = 0;
+      workingBoard[r][c].ownerId = null;
+
+      // Send orbs to neighbors
+      const neighbors = getNeighbors(r, c, rows, cols);
+      for (const [nr, nc] of neighbors) {
+        const prevOwner = workingBoard[nr][nc].ownerId;
+
+        // Add orb to neighbor
+        workingBoard[nr][nc].orbs += 1;
+        workingBoard[nr][nc].ownerId = explodingPlayer;
+
+        // Track the flying orb
+        flyingOrbs.push({
+          id: `orb-${step}-${r}-${c}-${nr}-${nc}`,
+          fromRow: r,
+          fromCol: c,
+          toRow: nr,
+          toCol: nc,
+          color,
+        });
+
+        // Track arrived cell
+        arrivedCells.push({
+          row: nr,
+          col: nc,
+          playerId: explodingPlayer,
+          orbCount: workingBoard[nr][nc].orbs,
+        });
+
+        // Track capture if this was opponent's cell
+        if (prevOwner && prevOwner !== explodingPlayer) {
+          capturedCells.push({ row: nr, col: nc, playerId: explodingPlayer });
+        }
+      }
+    }
+
+    // Add frame for this explosion step
+    frames.push({
+      explodingCells: cellsToExplode,
+      flyingOrbs,
+      arrivedCells,
+      capturedCells,
     });
 
     step++;
   }
 
-  return snapshots;
+  return {
+    frames,
+    finalBoard: workingBoard,
+  };
 };
 
 // Count orbs for a player
@@ -233,12 +247,11 @@ export const createOfflineGame = (
     started: true,
     winner: undefined,
     turnEvents: [],
-    boardSnapshots: [],
     roundNumber: 1,
   };
 };
 
-// Place an orb locally - returns new state with boardSnapshots for animation
+// Place an orb locally with animation sequence
 export const placeOrbLocal = (
   game: GameState,
   playerId: string,
@@ -258,24 +271,24 @@ export const placeOrbLocal = (
 
   if (cell.ownerId !== null && cell.ownerId !== playerId) return null;
 
-  // Generate board snapshots for animation
-  const boardSnapshots = generateSnapshots(
+  // Helper to get player color
+  const getPlayerColor = (id: string): string => {
+    return game.players.find((p) => p.id === id)?.color || "#6b7280";
+  };
+
+  // Generate animation sequence
+  const animationSequence = generateAnimationSequence(
     game.board,
     game.rows,
     game.cols,
     row,
     col,
-    playerId
+    playerId,
+    getPlayerColor
   );
 
-  // Get the final board state from the last snapshot
-  const lastSnapshot = boardSnapshots[boardSnapshots.length - 1];
-  const finalBoard: Cell[][] = lastSnapshot.board.map((snapRow) =>
-    snapRow.map((snap) => ({
-      orbs: snap.orbs,
-      ownerId: snap.ownerId,
-    }))
-  );
+  // Use the final board from the animation
+  const finalBoard = animationSequence.finalBoard;
 
   // Update players
   const newPlayers = game.players.map((p) => {
@@ -313,30 +326,14 @@ export const placeOrbLocal = (
     newCurrentPlayerIndex = nextIndex;
   }
 
-  // Generate turn events from the final state
-  const turnEvents: any[] = [];
-  if (boardSnapshots.length > 2) {
-    // There were chain reactions
-    for (let i = 2; i < boardSnapshots.length; i++) {
-      const snapshot = boardSnapshots[i];
-      for (const cellKey of snapshot.changedCells) {
-        const [r, c] = cellKey.split("-").map(Number);
-        const cell = snapshot.board[r][c];
-        if (cell.ownerId !== playerId) {
-          turnEvents.push({ type: "capture", row: r, col: c, playerId, playerName: player.name });
-        }
-      }
-    }
-  }
-
   return {
     ...game,
     board: finalBoard,
     players: newPlayers,
     currentPlayerIndex: newCurrentPlayerIndex,
     currentPlayer: newPlayers[newCurrentPlayerIndex].id,
-    turnEvents,
-    boardSnapshots,
+    turnEvents: [],
+    animationSequence,
     winner,
   };
 };
@@ -359,11 +356,8 @@ const scoreMove = (
   let score = 0;
   score += 10;
 
-  if (cell.orbs === capacity - 1) {
-    score += 50;
-  } else if (cell.orbs === capacity - 2) {
-    score += 25;
-  }
+  if (cell.orbs === capacity - 1) score += 50;
+  else if (cell.orbs === capacity - 2) score += 25;
 
   if (cell.ownerId === null) {
     const neighbors = getNeighbors(row, col, game.rows, game.cols);
@@ -381,10 +375,7 @@ const scoreMove = (
     score += ownCells * 10;
   }
 
-  if (cell.ownerId === playerId && cell.orbs === capacity) {
-    score -= 20;
-  }
-
+  if (cell.ownerId === playerId && cell.orbs === capacity) score -= 20;
   if (capacity === 1) score += 15;
   if (capacity === 2) score += 8;
 

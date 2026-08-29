@@ -20,17 +20,33 @@ export interface TurnEvent {
   chainReactionStep?: number;
 }
 
-// Snapshot of a single cell for animation playback
-export interface CellSnapshot {
-  orbs: number;
-  ownerId: string | null;
-  animating?: "explode" | "capture" | "arrive" | "place";
+// A single orb flying from one cell to another
+export interface FlyingOrb {
+  id: string;
+  fromRow: number;
+  fromCol: number;
+  toRow: number;
+  toCol: number;
+  color: string;
 }
 
-// A board snapshot at a point in the chain reaction
-export interface BoardSnapshot {
-  board: CellSnapshot[][];
-  changedCells: string[]; // "row-col" keys of cells that changed
+// One frame in the chain reaction animation
+export interface AnimationFrame {
+  // Cells that are exploding (glowing)
+  explodingCells: { row: number; col: number; playerId: string }[];
+  // Orbs that are flying from source to destination
+  flyingOrbs: FlyingOrb[];
+  // Cells that just received orbs (to show them appearing)
+  arrivedCells: { row: number; col: number; playerId: string; orbCount: number }[];
+  // Cells being captured
+  capturedCells: { row: number; col: number; playerId: string }[];
+}
+
+// Complete animation sequence for a move
+export interface AnimationSequence {
+  frames: AnimationFrame[];
+  // Final board state after all reactions
+  finalBoard: Cell[][];
 }
 
 export interface GameState {
@@ -45,7 +61,7 @@ export interface GameState {
   started: boolean;
   winner?: Player;
   turnEvents: TurnEvent[];
-  boardSnapshots?: BoardSnapshot[];
+  animationSequence?: AnimationSequence;
   roundNumber: number;
 }
 

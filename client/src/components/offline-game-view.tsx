@@ -3,7 +3,7 @@ import { AnimationPlayer } from "@/components/animation-player";
 import { PlayerIndicator } from "@/components/player-indicator";
 import { GameControls } from "@/components/game-controls";
 import { toast } from "sonner";
-import { GameState, BoardSnapshot } from "@/types/game";
+import { GameState, AnimationFrame } from "@/types/game";
 import { AskReplay } from "./ask-replay";
 import { OfflineGameConfig } from "./offline-setup-view";
 import {
@@ -29,7 +29,8 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
   const [eventLog, setEventLog] = useState<string[]>([]);
   const [aiThinking, setAiThinking] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
-  const [currentSnapshots, setCurrentSnapshots] = useState<BoardSnapshot[]>([]);
+  const [animationFrames, setAnimationFrames] = useState<AnimationFrame[]>([]);
+  const [preAnimationBoard, setPreAnimationBoard] = useState<{ orbs: number; ownerId: string | null }[][]>([]);
 
   const aiTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pendingStateRef = useRef<GameState | null>(null);
@@ -56,28 +57,14 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
   // Handle animation completion
   const handleAnimationComplete = useCallback(() => {
     setIsAnimating(false);
-    setCurrentSnapshots([]);
+    setAnimationFrames([]);
 
     if (pendingStateRef.current) {
       const finalState = pendingStateRef.current;
       setGameState(finalState);
       pendingStateRef.current = null;
 
-      // Process events for log
-      if (finalState.turnEvents && finalState.turnEvents.length > 0) {
-        const logs: string[] = [];
-        finalState.turnEvents.forEach((event) => {
-          if (event.type === "capture") {
-            logs.push(`⚡ ${event.playerName || "Player"} captured a cell!`);
-          } else if (event.type === "elimination") {
-            logs.push(`❌ ${event.playerName || "Player"} has been eliminated!`);
-          } else if (event.type === "win") {
-            logs.push(`🏆 ${event.playerName || "Player"} wins the game!`);
-          }
-        });
-        setEventLog((prev) => [...prev.slice(-10), ...logs]);
-      }
-
+      // Check for winner
       if (finalState.winner) {
         toast.success(`${finalState.winner.name} wins the game!`);
         setWinnerSelected(true);
@@ -88,20 +75,14 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
   // Start animation for a move
   const startAnimation = useCallback(
     (newState: GameState, preMoveState: GameState) => {
-      if (newState.boardSnapshots && newState.boardSnapshots.length > 1) {
+      if (
+        newState.animationSequence &&
+        newState.animationSequence.frames.length > 1
+      ) {
         // Has chain reactions - animate them
         pendingStateRef.current = newState;
-        // Start from the pre-move board so the orb placement is also animated
-        const startSnapshots: BoardSnapshot[] = [
-          {
-            board: preMoveState.board.map((row) =>
-              row.map((cell) => ({ ...cell }))
-            ),
-            changedCells: [],
-          },
-          ...newState.boardSnapshots.slice(1), // Skip the first snapshot (pre-place)
-        ];
-        setCurrentSnapshots(startSnapshots);
+        setPreAnimationBoard(preMoveState.board);
+        setAnimationFrames(newState.animationSequence.frames);
         setIsAnimating(true);
       } else {
         // No chain reactions - just apply the state directly
@@ -196,7 +177,7 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
     setWinnerSelected(false);
     setEventLog([]);
     setIsAnimating(false);
-    setCurrentSnapshots([]);
+    setAnimationFrames([]);
     toast.success("New game started!");
   };
 
@@ -305,13 +286,14 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
 
         {/* Board with animation */}
         <div className="mb-2 md:mb-4">
-          {isAnimating && currentSnapshots.length > 0 ? (
+          {isAnimating && animationFrames.length > 0 ? (
             <AnimationPlayer
-              boardSnapshots={currentSnapshots}
+              frames={animationFrames}
               rows={gameState.rows}
               cols={gameState.cols}
               players={gameState.players}
-              onSnapshotComplete={handleAnimationComplete}
+              initialBoard={preAnimationBoard}
+              onAnimationComplete={handleAnimationComplete}
             />
           ) : (
             <StaticBoard
@@ -319,6 +301,7 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
               rows={gameState.rows}
               cols={gameState.cols}
               players={gameState.players}
+              currentPlayerId={gameState.players[gameState.currentPlayerIndex]?.id}
               onCellClick={handleCellClick}
               isCurrentPlayerTurn={isCurrentPlayerTurn && !aiThinking && !isAnimating}
             />
@@ -391,6 +374,7 @@ function StaticBoard({
   rows,
   cols,
   players,
+  currentPlayerId,
   onCellClick,
   isCurrentPlayerTurn,
 }: {
@@ -398,6 +382,7 @@ function StaticBoard({
   rows: number;
   cols: number;
   players: any[];
+  currentPlayerId?: string;
   onCellClick: (row: number, col: number) => void;
   isCurrentPlayerTurn: boolean;
 }) {
@@ -433,7 +418,7 @@ function StaticBoard({
             const ownerColor = cell.ownerId ? getPlayerColor(cell.ownerId) : null;
             const isClickable =
               isCurrentPlayerTurn &&
-              (cell.ownerId === null || cell.ownerId === "human-0");
+              (cell.ownerId === null || cell.ownerId === currentPlayerId);
             const isAboutToExplode = cell.orbs >= capacity && cell.orbs > 0;
 
             return (

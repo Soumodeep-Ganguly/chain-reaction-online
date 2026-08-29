@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { AnimationPlayer } from "@/components/animation-player";
 import { PlayerIndicator } from "@/components/player-indicator";
 import { GameControls } from "@/components/game-controls";
 import { toast } from "sonner";
 import socket from "@/lib/socket";
-import { GameState, Player } from "@/types/game";
+import { GameState, Player, AnimationFrame, FlyingOrb } from "@/types/game";
 import { AskReplay } from "./ask-replay";
 import { useAuth } from "@/lib/auth-context";
 import { countPlayerOrbs, countPlayerCells } from "@/lib/game-helpers";
@@ -16,6 +17,87 @@ interface GameViewProps {
   roomId: string;
 }
 
+// Generate animation frames from board diff (before -> after)
+function generateFramesFromDiff(
+  beforeBoard: { orbs: number; ownerId: string | null }[][],
+  afterBoard: { orbs: number; ownerId: string | null }[][],
+  rows: number,
+  cols: number
+): AnimationFrame[] {
+  const frames: AnimationFrame[] = [];
+
+  // Find cells that changed
+  const changedCells: { row: number; col: number; before: { orbs: number; ownerId: string | null }; after: { orbs: number; ownerId: string | null } }[] = [];
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const b = beforeBoard[r][c];
+      const a = afterBoard[r][c];
+      if (b.orbs !== a.orbs || b.ownerId !== a.ownerId) {
+        changedCells.push({ row: r, col: c, before: b, after: a });
+      }
+    }
+  }
+
+  if (changedCells.length === 0) return frames;
+
+  // Simple approach: show the change as a single frame
+  // Find which cells exploded (had orbs, now empty)
+  const explodingCells: { row: number; col: number; playerId: string }[] = [];
+  const arrivedCells: { row: number; col: number; playerId: string; orbCount: number }[] = [];
+  const flyingOrbs: FlyingOrb[] = [];
+
+  for (const change of changedCells) {
+    if (change.after.orbs > change.before.orbs && change.after.ownerId) {
+      // Cell gained orbs - it's an arrival
+      arrivedCells.push({
+        row: change.row,
+        col: change.col,
+        playerId: change.after.ownerId,
+        orbCount: change.after.orbs,
+      });
+    } else if (change.before.orbs > 0 && change.after.orbs === 0) {
+      // Cell had orbs, now empty - it exploded
+      if (change.before.ownerId) {
+        explodingCells.push({
+          row: change.row,
+          col: change.col,
+          playerId: change.before.ownerId,
+        });
+      }
+    } else if (change.after.orbs > 0 && change.after.ownerId) {
+      // Cell changed orbs/owner
+      arrivedCells.push({
+        row: change.row,
+        col: change.col,
+        playerId: change.after.ownerId,
+        orbCount: change.after.orbs,
+      });
+    }
+  }
+
+  // Create frames: first arrivals, then if there were explosions, show them
+  if (arrivedCells.length > 0) {
+    frames.push({
+      explodingCells: [],
+      flyingOrbs: [],
+      arrivedCells,
+      capturedCells: [],
+    });
+  }
+
+  if (explodingCells.length > 0) {
+    frames.push({
+      explodingCells,
+      flyingOrbs,
+      arrivedCells: [],
+      capturedCells: [],
+    });
+  }
+
+  return frames;
+}
+
 export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [isCurrentPlayer, setIsCurrentPlayer] = useState<boolean>(false);
@@ -23,46 +105,46 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
   const [winnerSelected, setWinnerSelected] = useState(false);
   const [exitGame, setExitGame] = useState(false);
   const [eventLog, setEventLog] = useState<string[]>([]);
-  const [changedCells, setChangedCells] = useState<Set<string>>(new Set());
+  const [isAnimating, setIsAnimating] = useState(false);
+  const [animationFrames, setAnimationFrames] = useState<AnimationFrame[]>([]);
+  const [preAnimationBoard, setPreAnimationBoard] = useState<{ orbs: number; ownerId: string | null }[][]>([]);
 
   const { uuid } = useAuth();
   const joinedRef = useRef(false);
   const firstConnectRef = useRef(true);
   const prevBoardRef = useRef<string>("");
+  const pendingStateRef = useRef<GameState | null>(null);
 
-  // Detect changed cells for animation highlights
-  const detectChanges = useCallback((newBoard: any[][]) => {
-    const boardStr = JSON.stringify(newBoard);
-    if (prevBoardRef.current === "") {
-      prevBoardRef.current = boardStr;
-      return;
-    }
+  // Handle animation completion
+  const handleAnimationComplete = useCallback(() => {
+    setIsAnimating(false);
+    setAnimationFrames([]);
 
-    try {
-      const prevBoard = JSON.parse(prevBoardRef.current);
-      const changes = new Set<string>();
+    if (pendingStateRef.current) {
+      const finalState = pendingStateRef.current;
+      setGameState(finalState);
+      pendingStateRef.current = null;
 
-      for (let r = 0; r < newBoard.length; r++) {
-        for (let c = 0; c < newBoard[r].length; c++) {
-          if (
-            prevBoard[r]?.[c]?.orbs !== newBoard[r][c].orbs ||
-            prevBoard[r]?.[c]?.ownerId !== newBoard[r][c].ownerId
-          ) {
-            changes.add(`${r}-${c}`);
+      if (finalState.turnEvents && finalState.turnEvents.length > 0) {
+        const logs: string[] = [];
+        finalState.turnEvents.forEach((event) => {
+          if (event.type === "explosion") {
+            logs.push(`💥 ${event.playerName || "Player"}'s cell exploded!`);
+          } else if (event.type === "capture") {
+            logs.push(`⚡ ${event.playerName || "Player"} captured a cell!`);
+          } else if (event.type === "elimination") {
+            logs.push(`❌ ${event.playerName || "Player"} has been eliminated!`);
+          } else if (event.type === "win") {
+            logs.push(`🏆 ${event.playerName || "Player"} wins the game!`);
           }
-        }
+        });
+        setEventLog((prev) => [...prev.slice(-10), ...logs]);
       }
 
-      if (changes.size > 0) {
-        setChangedCells(changes);
-        // Clear highlights after animation
-        setTimeout(() => setChangedCells(new Set()), 600);
+      if (finalState.winner) {
+        setWinnerSelected(true);
       }
-    } catch {
-      // ignore parse errors
     }
-
-    prevBoardRef.current = boardStr;
   }, []);
 
   useEffect(() => {
@@ -88,33 +170,40 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
     });
 
     socket.on("game-updated", (state: GameState) => {
-      // Detect changed cells for animation
-      if (state.board) {
-        detectChanges(state.board);
+      if (isAnimating) {
+        // Queue the state update for after animation completes
+        pendingStateRef.current = state;
+        return;
       }
 
+      // Generate animation frames from board diff
+      if (state.board && prevBoardRef.current) {
+        try {
+          const prevBoard = JSON.parse(prevBoardRef.current);
+          const frames = generateFramesFromDiff(
+            prevBoard,
+            state.board,
+            state.rows,
+            state.cols
+          );
+
+          if (frames.length > 0) {
+            pendingStateRef.current = state;
+            setPreAnimationBoard(prevBoard);
+            setAnimationFrames(frames);
+            setIsAnimating(true);
+            prevBoardRef.current = JSON.stringify(state.board);
+            return;
+          }
+        } catch {
+          // ignore parse errors
+        }
+      }
+
+      prevBoardRef.current = JSON.stringify(state.board);
       setGameState(state);
 
-      // Process turn events for log
-      if (state.turnEvents && state.turnEvents.length > 0) {
-        const logs: string[] = [];
-        state.turnEvents.forEach((event) => {
-          if (event.type === "explosion") {
-            logs.push(`💥 ${event.playerName || "Player"}'s cell exploded!`);
-          } else if (event.type === "capture") {
-            logs.push(`⚡ ${event.playerName || "Player"} captured a cell!`);
-          } else if (event.type === "elimination") {
-            logs.push(`❌ ${event.playerName || "Player"} has been eliminated!`);
-          } else if (event.type === "win") {
-            logs.push(`🏆 ${event.playerName || "Player"} wins the game!`);
-          }
-        });
-        setEventLog((prev) => [...prev.slice(-10), ...logs]);
-      }
-
-      if (state.winner) {
-        setWinnerSelected(true);
-      }
+      if (!state.winner) setWinnerSelected(false);
 
       if (!state || !state?.players || state?.players?.length === 0) {
         setTimeout(() => {
@@ -169,7 +258,7 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
       socket.off("invalid-move");
       socket.off("game-over");
     };
-  }, [roomId, playerName, gameState, onNavigate, detectChanges]);
+  }, [roomId, playerName, gameState, isAnimating, onNavigate]);
 
   useEffect(() => {
     if (gameState) {
@@ -179,7 +268,7 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
   }, [gameState]);
 
   const handleCellClick = (row: number, col: number) => {
-    if (!isCurrentPlayer || !gameState) return;
+    if (!isCurrentPlayer || !gameState || isAnimating) return;
     socket.emit("place-orb", { roomId, row, col });
   };
 
@@ -224,10 +313,6 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
     const adjacentCount =
       (isTop ? 0 : 1) + (isBottom ? 0 : 1) + (isLeft ? 0 : 1) + (isRight ? 0 : 1);
     return adjacentCount - 1;
-  };
-
-  const getPlayerColor = (playerId: string): string => {
-    return gameState.players.find((p) => p.id === playerId)?.color || "#6b7280";
   };
 
   const cellSizeClass = getCellSize();
@@ -288,66 +373,74 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
         {/* Turn indicator */}
         {!winnerSelected && (
           <div className="mb-2 md:mb-4 text-white text-lg md:text-xl font-bold">
-            {gameState.players[gameState.currentPlayerIndex]?.id === socket.id
+            {isAnimating && <span className="animate-pulse">⚡ Chain reaction...</span>}
+            {!isAnimating && gameState.players[gameState.currentPlayerIndex]?.id === socket.id
               ? "Your"
-              : `${gameState.players[gameState.currentPlayerIndex]?.name}'s`}{" "}
-            turn
+              : !isAnimating ? `${gameState.players[gameState.currentPlayerIndex]?.name}'s` : ""}{" "}
+            {!isAnimating && "turn"}
           </div>
         )}
 
-        {/* Board */}
+        {/* Board with animation */}
         <div className="mb-2 md:mb-4">
-          <div className="flex flex-col items-center gap-0.5">
-            {gameState.board.map((row, rowIndex) => (
-              <div key={rowIndex} className="flex gap-0.5">
-                {row.map((cell, colIndex) => {
-                  const capacity = getCellCapacityLocal(rowIndex, colIndex);
-                  const ownerColor = cell.ownerId ? getPlayerColor(cell.ownerId) : null;
-                  const cellKey = `${rowIndex}-${colIndex}`;
-                  const isChanged = changedCells.has(cellKey);
-                  const isClickable =
-                    isCurrentPlayer &&
-                    (cell.ownerId === null || cell.ownerId === socket.id);
-                  const isAboutToExplode = cell.orbs >= capacity && cell.orbs > 0;
+          {isAnimating && animationFrames.length > 0 ? (
+            <AnimationPlayer
+              frames={animationFrames}
+              rows={gameState.rows}
+              cols={gameState.cols}
+              players={gameState.players}
+              initialBoard={preAnimationBoard}
+              onAnimationComplete={handleAnimationComplete}
+            />
+          ) : (
+            <div className="flex flex-col items-center gap-0.5">
+              {gameState.board.map((row, rowIndex) => (
+                <div key={rowIndex} className="flex gap-0.5">
+                  {row.map((cell, colIndex) => {
+                    const capacity = getCellCapacityLocal(rowIndex, colIndex);
+                    const ownerColor = cell.ownerId ? (gameState.players.find((p) => p.id === cell.ownerId)?.color || "#6b7280") : null;
+                    const cellKey = `${rowIndex}-${colIndex}`;
+                    const isClickable =
+                      isCurrentPlayer &&
+                      (cell.ownerId === null || cell.ownerId === socket.id);
+                    const isAboutToExplode = cell.orbs >= capacity && cell.orbs > 0;
 
-                  return (
-                    <div
-                      key={cellKey}
-                      className={`relative ${cellSizeClass} border-2 rounded-lg flex items-center justify-center transition-all duration-150 ${
-                        isClickable ? "cursor-pointer hover:scale-105 hover:shadow-lg active:scale-95" : "cursor-default"
-                      } ${isChanged ? "ring-2 ring-white animate-pulse" : ""} ${isAboutToExplode ? "ring-2 ring-yellow-300/60" : ""}`}
-                      style={{
-                        backgroundColor: ownerColor ? `${ownerColor}30` : "rgba(255, 255, 255, 0.1)",
-                        borderColor: ownerColor ? `${ownerColor}60` : "rgba(255, 255, 255, 0.2)",
-                      }}
-                      onClick={isClickable ? () => handleCellClick(rowIndex, colIndex) : undefined}
-                    >
-                      {cell.orbs > 0 && (
-                        <div className="relative w-full h-full">
-                          {getOrbPositions(cell.orbs, capacity).map((pos, i) => (
-                            <div
-                              key={i}
-                              className={`absolute w-2.5 h-2.5 md:w-3 md:h-3 rounded-full ${isChanged ? "scale-125" : ""}`}
-                              style={{
-                                backgroundColor: ownerColor || "#6b7280",
-                                left: pos.x,
-                                top: pos.y,
-                                transform: "translate(-50%, -50%)",
-                                boxShadow: isChanged
-                                  ? `0 0 10px 3px ${ownerColor || "#6b7280"}80`
-                                  : `0 1px 3px ${ownerColor || "#6b7280"}60`,
-                                transition: "all 0.15s ease-out",
-                              }}
-                            />
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
+                    return (
+                      <div
+                        key={cellKey}
+                        className={`relative ${cellSizeClass} border-2 rounded-lg flex items-center justify-center transition-all duration-150 ${
+                          isClickable ? "cursor-pointer hover:scale-105 hover:shadow-lg active:scale-95" : "cursor-default"
+                        } ${isAboutToExplode ? "ring-2 ring-white/60" : ""}`}
+                        style={{
+                          backgroundColor: ownerColor ? `${ownerColor}30` : "rgba(255, 255, 255, 0.1)",
+                          borderColor: ownerColor ? `${ownerColor}60` : "rgba(255, 255, 255, 0.2)",
+                        }}
+                        onClick={isClickable ? () => handleCellClick(rowIndex, colIndex) : undefined}
+                      >
+                        {cell.orbs > 0 && (
+                          <div className="relative w-full h-full">
+                            {getOrbPositions(cell.orbs, capacity).map((pos, i) => (
+                              <div
+                                key={i}
+                                className="absolute w-2.5 h-2.5 md:w-3 md:h-3 rounded-full"
+                                style={{
+                                  backgroundColor: ownerColor || "#6b7280",
+                                  left: pos.x,
+                                  top: pos.y,
+                                  transform: "translate(-50%, -50%)",
+                                  boxShadow: `0 1px 3px ${ownerColor || "#6b7280"}60`,
+                                }}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Event log */}
@@ -366,7 +459,7 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
         {/* Game controls */}
         <div className="w-full max-w-md mx-auto">
           <GameControls
-            isPlayerTurn={isCurrentPlayer}
+            isPlayerTurn={isCurrentPlayer && !isAnimating}
             onExitGame={() => setExitGame(true)}
             muteControl={muteControl}
             isMuted={isMuted}
