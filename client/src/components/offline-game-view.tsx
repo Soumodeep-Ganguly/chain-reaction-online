@@ -5,6 +5,7 @@ import { GameControls } from "@/components/game-controls";
 import { toast } from "sonner";
 import { GameState, AnimationFrame } from "@/types/game";
 import { AskReplay } from "./ask-replay";
+import { WinPopup } from "./win-popup";
 import { OfflineGameConfig } from "./offline-setup-view";
 import {
   createOfflineGame,
@@ -65,10 +66,11 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
       setGameState(finalState);
       pendingStateRef.current = null;
 
-      // Check for winner
+      // Check for winner — if found, stop everything immediately
       if (finalState.winner) {
         toast.success(`${finalState.winner.name} wins the game!`);
         setWinnerSelected(true);
+        return;
       }
     }
   }, []);
@@ -104,11 +106,28 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
     const currentPlayer = gameState.players[gameState.currentPlayerIndex];
     if (!currentPlayer || !currentPlayer.active) return;
 
+    // If only one active player remains, game is over
+    const activePlayers = gameState.players.filter(p => p.active);
+    if (activePlayers.length <= 1) {
+      if (activePlayers.length === 1 && !gameState.winner) {
+        toast.success(`${activePlayers[0].name} wins the game!`);
+        setGameState(prev => prev ? { ...prev, winner: activePlayers[0] } : prev);
+        setWinnerSelected(true);
+      }
+      return;
+    }
+
     if (isAI(currentPlayer.id)) {
       setAiThinking(true);
       const difficulty = config.aiDifficulty;
 
       aiTimeoutRef.current = setTimeout(() => {
+        // Re-check conditions before executing the move
+        if (winnerSelected || isAnimating) {
+          setAiThinking(false);
+          return;
+        }
+
         const move = getAIMove(gameState, currentPlayer.id, difficulty);
 
         if (move) {
@@ -201,20 +220,16 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
   return (
     <div className="min-h-dvh flex flex-col bg-gradient-to-b from-emerald-600 via-teal-500 to-cyan-500">
       {/* Winner overlay */}
-      {winnerSelected && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <AskReplay
-            confirmAction={replay}
-            declineAction={handleExit}
-            title={
-              !gameState.winner?.id.startsWith("ai-")
-                ? `${gameState.winner?.name} Won! 🎉`
-                : `${gameState.winner?.name} Won!`
-            }
-            confirmText="Play Again"
-            declineText="Exit"
-          />
-        </div>
+      {winnerSelected && gameState?.winner && (
+        <WinPopup
+          winnerName={gameState.winner.name}
+          isPlayerWin={!gameState.winner.id.startsWith("ai-")}
+          boardSize={`${config.rows}x${config.cols}`}
+          playerCount={config.humanPlayers + config.aiPlayers}
+          mode={config.mode}
+          onPlayAgain={replay}
+          onExit={handleExit}
+        />
       )}
 
       {/* Exit game overlay */}

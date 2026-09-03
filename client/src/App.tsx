@@ -12,6 +12,7 @@ import {
 } from "./components/offline-setup-view";
 import { OfflineGameView } from "./components/offline-game-view";
 import { TutorialView } from "./components/tutorial-view";
+import { ScoreboardView } from "./components/scoreboard-view";
 import { Toaster } from "./components/ui/sonner";
 import { initAudio } from "@/lib/sounds";
 
@@ -24,7 +25,8 @@ type AppView =
   | "profile"
   | "offline-setup"
   | "offline-game"
-  | "tutorial";
+  | "tutorial"
+  | "scoreboard";
 
 function ChainReactionContent() {
   const [currentView, setCurrentView] = useState<AppView>("home");
@@ -127,6 +129,10 @@ function ChainReactionContent() {
           onNavigate={setCurrentView}
           onStartGame={() => setCurrentView("offline-setup")}
         />
+      )}
+
+      {currentView === "scoreboard" && (
+        <ScoreboardView onNavigate={setCurrentView} />
       )}
 
       <Toaster position="top-center" expand={false} richColors closeButton />

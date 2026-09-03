@@ -6,7 +6,9 @@ import {
   registerAccount,
   getProfile,
   upgradeGuest,
+  syncScores,
 } from "./api";
+import { getUnsyncedScores, markScoresSynced } from "./score-tracker";
 
 export interface AuthUser {
   id: string;
@@ -83,6 +85,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(result.user);
           localStorage.setItem(TOKEN_KEY, result.token);
           localStorage.setItem(USER_KEY, JSON.stringify(result.user));
+          // Sync any unsynced localStorage scores on auto-login
+          syncLocalScores(result.token);
         } else if (!storedToken) {
           const guestUser: AuthUser = {
             id: uuid,
@@ -116,12 +120,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     autoLogin();
   }, [uuid]);
 
+  // Sync any unsynced localStorage scores to the DB
+  const syncLocalScores = async (authToken: string) => {
+    try {
+      const unsynced = getUnsyncedScores();
+      if (unsynced.length === 0) return;
+      const syncedTimestamps = await syncScores(
+        authToken,
+        unsynced.map((s) => ({
+          id: s.id,
+          won: s.won,
+          boardSize: s.boardSize,
+          timestamp: s.timestamp,
+        }))
+      );
+      if (syncedTimestamps.length > 0) {
+        markScoresSynced(syncedTimestamps);
+      }
+    } catch {
+      // Non-critical — scores stay in localStorage for later sync
+    }
+  };
+
   const login = async (email: string, password: string) => {
     const result = await loginAccount({ email, password });
     setToken(result.token);
     setUser(result.user);
     localStorage.setItem(TOKEN_KEY, result.token);
     localStorage.setItem(USER_KEY, JSON.stringify(result.user));
+    // Sync any localStorage scores from when the user was a guest
+    await syncLocalScores(result.token);
   };
 
   const register = async (
@@ -141,6 +169,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(result.user);
     localStorage.setItem(TOKEN_KEY, result.token);
     localStorage.setItem(USER_KEY, JSON.stringify(result.user));
+    // Sync any localStorage scores from when the user was a guest
+    await syncLocalScores(result.token);
   };
 
   const logout = () => {
@@ -182,6 +212,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(result.user);
     localStorage.setItem(TOKEN_KEY, result.token);
     localStorage.setItem(USER_KEY, JSON.stringify(result.user));
+    // Sync any localStorage scores from when the user was a guest
+    await syncLocalScores(result.token);
   };
 
   return (

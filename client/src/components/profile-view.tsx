@@ -8,7 +8,7 @@ import { useAuth } from "@/lib/auth-context";
 
 interface ProfileViewProps {
   onNavigate: (
-    view: "home" | "create-room" | "join-room" | "game" | "profile" | "auth"
+    view: "home" | "create-room" | "join-room" | "game" | "profile" | "auth" | "scoreboard"
   ) => void;
 }
 

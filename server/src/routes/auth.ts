@@ -353,5 +353,159 @@ export default function createAuthRouter(UserModel: any, GameHistoryModel: any) 
     }
   });
 
+  // ─── Scoreboard ───────────────────────────────────────────────────────────
+
+  // Save a single game result directly to DB
+  router.post("/save-score", async (req: Request, res: Response) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        res.status(401).json({ message: "No token provided" });
+        return;
+      }
+
+      let decoded: any;
+      try {
+        decoded = jwt.verify(authHeader.split(" ")[1], JWT_SECRET);
+      } catch {
+        res.status(401).json({ message: "Invalid token" });
+        return;
+      }
+
+      const { boardSize, mode, won } = req.body;
+      if (!boardSize || !mode || typeof won !== "boolean") {
+        res.status(400).json({ message: "Missing required fields" });
+        return;
+      }
+
+      const user = await UserModel.findOne({ uuid: decoded.uuid });
+      if (!user) {
+        res.status(404).json({ message: "User not found" });
+        return;
+      }
+
+      const history = new GameHistoryModel({
+        roomId: `offline-${Date.now()}`,
+        players: [{
+          userId: user._id,
+          uuid: user.uuid,
+          gameName: user.gameName,
+          orbsRemaining: 0,
+        }],
+        winnerId: user._id,
+        winnerUuid: user.uuid,
+        winnerGameName: user.gameName,
+        totalRounds: 1,
+        duration: 0,
+        boardSize,
+      });
+      await history.save();
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Save score error:", error);
+      res.status(500).json({ message: "Failed to save score" });
+    }
+  });
+
+  // Get top players (scoreboard)
+  router.get("/scoreboard", async (_req: Request, res: Response) => {
+    try {
+      const topPlayers = await GameHistoryModel.aggregate([
+        {
+          $group: {
+            _id: "$winnerUuid",
+            gameName: { $first: "$winnerGameName" },
+            wins: { $sum: 1 },
+          },
+        },
+        { $sort: { wins: -1 } },
+        { $limit: 20 },
+      ]);
+
+      // Enrich with total games played
+      const enriched = await Promise.all(
+        topPlayers.map(async (p: any) => {
+          const gamesPlayed = await GameHistoryModel.countDocuments({
+            "players.uuid": p._id,
+          });
+          return {
+            uuid: p._id,
+            gameName: p.gameName,
+            wins: p.wins,
+            gamesPlayed,
+            winRate:
+              gamesPlayed > 0
+                ? Math.round((p.wins / gamesPlayed) * 100)
+                : 0,
+          };
+        })
+      );
+
+      res.json({ scoreboard: enriched });
+    } catch (error) {
+      console.error("Scoreboard error:", error);
+      res.status(500).json({ message: "Failed to get scoreboard" });
+    }
+  });
+
+  // Sync offline scores to DB
+  router.post("/sync-scores", async (req: Request, res: Response) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        res.status(401).json({ message: "No token provided" });
+        return;
+      }
+
+      let decoded: any;
+      try {
+        decoded = jwt.verify(authHeader.split(" ")[1], JWT_SECRET);
+      } catch {
+        res.status(401).json({ message: "Invalid token" });
+        return;
+      }
+
+      const { scores } = req.body;
+      if (!Array.isArray(scores) || scores.length === 0) {
+        res.status(400).json({ message: "No scores to sync" });
+        return;
+      }
+
+      const user = await UserModel.findOne({ uuid: decoded.uuid });
+      if (!user) {
+        res.status(404).json({ message: "User not found" });
+        return;
+      }
+
+      const created = [];
+      for (const score of scores) {
+        if (!score.won) continue; // Only sync wins
+        const history = new GameHistoryModel({
+          roomId: `offline-${score.id}`,
+          players: [{
+            userId: user._id,
+            uuid: user.uuid,
+            gameName: user.gameName,
+            orbsRemaining: 0,
+          }],
+          winnerId: user._id,
+          winnerUuid: user.uuid,
+          winnerGameName: user.gameName,
+          totalRounds: 1,
+          duration: 0,
+          boardSize: score.boardSize || "8x8",
+        });
+        await history.save();
+        created.push(score.timestamp);
+      }
+
+      res.json({ synced: created });
+    } catch (error) {
+      console.error("Sync scores error:", error);
+      res.status(500).json({ message: "Failed to sync scores" });
+    }
+  });
+
   return router;
 }

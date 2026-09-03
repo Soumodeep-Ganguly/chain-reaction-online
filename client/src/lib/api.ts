@@ -119,3 +119,46 @@ export async function upgradeGuest(
   }
   return res.json();
 }
+
+export interface ScoreboardEntry {
+  uuid: string;
+  gameName: string;
+  wins: number;
+  gamesPlayed: number;
+  winRate: number;
+}
+
+export async function getScoreboard(): Promise<ScoreboardEntry[]> {
+  const res = await fetch(`${API_URL}/auth/scoreboard`, {
+    headers: getHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to get scoreboard");
+  const data = await res.json();
+  return data.scoreboard;
+}
+
+export async function syncScores(
+  token: string,
+  scores: { id: string; won: boolean; boardSize: string; timestamp: number }[]
+): Promise<number[]> {
+  const res = await fetch(`${API_URL}/auth/sync-scores`, {
+    method: "POST",
+    headers: getHeaders(token),
+    body: JSON.stringify({ scores }),
+  });
+  if (!res.ok) throw new Error("Failed to sync scores");
+  const data = await res.json();
+  return data.synced;
+}
+
+export async function saveScore(
+  token: string,
+  data: { boardSize: string; mode: string; won: boolean }
+): Promise<void> {
+  const res = await fetch(`${API_URL}/auth/save-score`, {
+    method: "POST",
+    headers: getHeaders(token),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to save score");
+}

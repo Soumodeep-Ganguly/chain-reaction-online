@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChainReactionLogo } from "@/components/chain-reaction-logo";
 import { useAuth } from "@/lib/auth-context";
-import { User, LogIn, Wifi, WifiOff, Users, Gamepad2, BookOpen } from "lucide-react";
+import { User, LogIn, Wifi, WifiOff, Users, Gamepad2, BookOpen, Trophy } from "lucide-react";
 
 interface HomeViewProps {
   onNavigate: (
@@ -14,6 +14,7 @@ interface HomeViewProps {
       | "auth"
       | "offline-setup"
       | "tutorial"
+      | "scoreboard"
   ) => void;
 }
 
@@ -115,6 +116,15 @@ export function HomeView({ onNavigate }: HomeViewProps) {
                 vs Computer or local multiplayer • 2-6 players on same device
               </p>
             </div>
+
+            {/* Scoreboard Button */}
+            <button
+              className="w-full min-h-[44px] px-4 md:px-6 rounded-md inline-flex items-center justify-center gap-2 text-base md:text-lg font-bold transition-all border-2 border-yellow-400 bg-white text-yellow-700 hover:bg-yellow-50 active:scale-95"
+              onClick={() => onNavigate("scoreboard")}
+            >
+              <Trophy className="h-4 w-4 md:h-5 md:w-5" />
+              Leaderboard
+            </button>
 
             {/* Account Section */}
             <div className="flex gap-2 pt-1">
