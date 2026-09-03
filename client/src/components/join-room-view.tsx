@@ -78,16 +78,16 @@ export function JoinRoomView({
     : false;
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-4">
+    <div className="min-h-screen flex flex-col items-center justify-center p-2">
       <div className="w-full max-w-md">
         <Card className="border-4 border-cyan-400 shadow-2xl">
-          <CardHeader className="flex flex-col items-center">
+          <CardHeader className="flex flex-col items-center p-3 md:p-4">
             <ChainReactionLogo className="w-32 h-auto mb-2" />
             <CardTitle className="text-2xl font-extrabold">
               Join Room
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-6">
+          <CardContent className="space-y-3 p-3 md:p-4">
             <div className="space-y-2">
               <Label htmlFor="roomId">Room ID</Label>
               <Input

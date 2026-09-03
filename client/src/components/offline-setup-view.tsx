@@ -85,16 +85,16 @@ export function OfflineSetupView({
   const canStart = playerName.trim().length > 0;
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-4">
+    <div className="min-h-screen flex flex-col items-center justify-center p-2">
       <div className="w-full max-w-md">
         <Card className="border-4 border-orange-400 shadow-2xl">
-          <CardHeader className="flex flex-col items-center">
+          <CardHeader className="flex flex-col items-center p-3 md:p-4">
             <ChainReactionLogo className="w-32 h-auto mb-2" />
             <CardTitle className="text-2xl font-extrabold">
               Offline Game Setup
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-5">
+          <CardContent className="space-y-3 p-3 md:p-4">
             {/* Player Name */}
             <div className="space-y-2">
               <Label htmlFor="playerName">Your Name</Label>

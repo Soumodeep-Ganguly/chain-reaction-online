@@ -59,7 +59,7 @@ function ChainReactionContent() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-emerald-600 via-teal-500 to-cyan-500 w-[100vw]">
+    <div className="min-h-screen bg-gradient-to-b from-emerald-600 via-teal-500 to-cyan-500 w-full overflow-x-hidden">
       {currentView === "home" && (
         <HomeView onNavigate={setCurrentView} />
       )}

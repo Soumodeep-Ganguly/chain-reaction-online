@@ -21,11 +21,11 @@ export function HomeView({ onNavigate }: HomeViewProps) {
   const { user, isAuthenticated, isLoading } = useAuth();
 
   return (
-    <div className="min-h-dvh flex flex-col items-center justify-center p-3 md:p-4">
+    <div className="min-h-dvh flex flex-col items-center justify-center p-2">
       <div className="w-full max-w-md">
         <Card className="border-2 md:border-4 border-emerald-400 shadow-2xl">
-          <CardHeader className="flex flex-col items-center p-4 md:p-6">
-            <ChainReactionLogo className="w-32 md:w-48 h-auto mb-2 md:mb-4" />
+          <CardHeader className="flex flex-col items-center p-3 md:p-4">
+            <ChainReactionLogo className="w-28 md:w-40 h-auto mb-1" />
             <CardTitle className="text-2xl md:text-3xl font-extrabold text-center">
               Chain Reaction
             </CardTitle>
@@ -40,9 +40,9 @@ export function HomeView({ onNavigate }: HomeViewProps) {
               </p>
             )}
           </CardHeader>
-          <CardContent className="space-y-3 md:space-y-4 p-4 md:p-6">
+          <CardContent className="space-y-2 md:space-y-3 p-3 md:p-4">
             {/* Game Features Banner */}
-            <div className="bg-gradient-to-r from-emerald-100 to-cyan-100 rounded-lg p-2 md:p-3 text-center">
+            <div className="bg-gradient-to-r from-emerald-100 to-cyan-100 rounded-lg p-1.5 text-center">
               <div className="flex items-center justify-center gap-2 text-xs md:text-sm font-bold text-emerald-700">
                 <Users className="h-3 w-3 md:h-4 md:w-4" />
                 2-6 Players • Explosive Chain Reactions!
@@ -117,7 +117,7 @@ export function HomeView({ onNavigate }: HomeViewProps) {
             </div>
 
             {/* Account Section */}
-            <div className="flex gap-2 md:gap-3 pt-2">
+            <div className="flex gap-2 pt-1">
               <button
                 className="flex-1 min-h-[44px] px-3 md:px-4 rounded-md inline-flex items-center justify-center gap-1.5 md:gap-2 text-xs md:text-sm font-bold border-2 border-gray-300 bg-white text-gray-900 hover:bg-gray-100 transition-all"
                 onClick={() => onNavigate("profile")}

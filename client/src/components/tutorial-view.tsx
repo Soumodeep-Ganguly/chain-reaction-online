@@ -398,6 +398,18 @@ function InteractiveBoard({
 
   const cellSize = getCellSize();
   const gap = 2;
+  const boardRef = useRef<HTMLDivElement>(null);
+  const [measuredCellPx, setMeasuredCellPx] = useState(cellSize.px);
+
+  // Measure actual cell size from DOM
+  useEffect(() => {
+    if (boardRef.current) {
+      const firstCell = boardRef.current.querySelector<HTMLElement>("[data-cell]");
+      if (firstCell) {
+        setMeasuredCellPx(firstCell.getBoundingClientRect().width);
+      }
+    }
+  });
 
   const isTarget = (row: number, col: number) => {
     return targetCell.row === row && targetCell.col === col;
@@ -423,7 +435,7 @@ function InteractiveBoard({
 
   return (
     <div className="relative">
-      <div className="flex flex-col gap-0.5">
+      <div ref={boardRef} className="flex flex-col gap-0.5">
         {board.map((row, rowIndex) => (
           <div key={rowIndex} className="flex gap-0.5">
             {row.map((cell, colIndex) => {
@@ -439,6 +451,7 @@ function InteractiveBoard({
               return (
                 <div
                   key={cellKey}
+                  data-cell
                   className={`relative ${cellSize.cls} border-2 rounded-lg flex items-center justify-center transition-all duration-200
                     ${target && !animating ? "cursor-pointer hover:scale-105 hover:shadow-lg active:scale-95 ring-2 ring-yellow-400 shadow-lg shadow-yellow-400/40 animate-pulse" : "cursor-not-allowed opacity-70"}
                     ${isExploding ? "ring-4 ring-white animate-pulse" : ""}
@@ -536,7 +549,7 @@ function InteractiveBoard({
               toRow={orb.toRow}
               toCol={orb.toCol}
               color={orb.color}
-              cellPx={cellSize.px}
+              cellPx={measuredCellPx}
               gap={gap}
               duration={350}
               onComplete={onOrbArrived}
@@ -957,10 +970,10 @@ export function TutorialView({ onNavigate, onStartGame }: TutorialViewProps) {
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-3 md:p-4">
+    <div className="min-h-screen flex flex-col items-center justify-center p-2">
       <div className="w-full max-w-md">
         <Card className="border-2 md:border-4 border-emerald-400 shadow-2xl">
-          <CardHeader className="flex flex-col items-center p-4 md:p-6">
+          <CardHeader className="flex flex-col items-center p-3 md:p-4">
             <ChainReactionLogo className="w-24 md:w-36 h-auto mb-2" />
             <div className="flex items-center gap-2">
               {lesson.icon}
@@ -1010,7 +1023,7 @@ export function TutorialView({ onNavigate, onStartGame }: TutorialViewProps) {
             </div>
           </CardHeader>
 
-          <CardContent className="space-y-4 p-4 md:p-6">
+          <CardContent className="space-y-3 p-3 md:p-4">
             {/* Instruction */}
             <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
               <p className="text-sm text-emerald-800 font-medium leading-relaxed">

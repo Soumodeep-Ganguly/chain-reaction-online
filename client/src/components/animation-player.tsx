@@ -36,6 +36,18 @@ export function AnimationPlayer({
 
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const mountedRef = useRef(false);
+  const boardRef = useRef<HTMLDivElement>(null);
+  const [measuredCellPx, setMeasuredCellPx] = useState(64);
+
+  // Measure actual cell size from DOM after render
+  useEffect(() => {
+    if (boardRef.current) {
+      const firstCell = boardRef.current.querySelector<HTMLElement>("[data-cell]");
+      if (firstCell) {
+        setMeasuredCellPx(firstCell.getBoundingClientRect().width);
+      }
+    }
+  });
 
   const getPlayerColor = (playerId: string): string => {
     return players.find((p) => p.id === playerId)?.color || "#6b7280";
@@ -202,7 +214,7 @@ export function AnimationPlayer({
   return (
     <div className="relative">
       {/* Board grid */}
-      <div className="flex flex-col gap-0.5">
+      <div ref={boardRef} className="flex flex-col gap-0.5">
         {displayBoard.map((row, rowIndex) => (
           <div key={rowIndex} className="flex gap-0.5">
             {row.map((cell, colIndex) => {
@@ -212,14 +224,13 @@ export function AnimationPlayer({
               const isExploding = explodingCells.has(cellKey);
               const isArriving = arrivingCells.has(cellKey);
               const isCaptured = capturedCells.has(cellKey);
-              const isAboutToExplode = cell.orbs >= capacity && cell.orbs > 0;
-
-              return (
-                <div
-                  key={cellKey}
-                  className={`
-                    relative ${cellSize.class} border-2 rounded-lg
-                    flex items-center justify-center
+              const isAboutToExplode = cell.orbs >= capacity && cell.orbs > 0;                  return (
+                    <div
+                      key={cellKey}
+                      data-cell
+                      className={`
+                        relative ${cellSize.class} border-2 rounded-lg
+                        flex items-center justify-center
                     ${isExploding ? "ring-4 ring-white animate-pulse" : ""}
                     ${isArriving ? "ring-2 ring-yellow-300 scale-110" : ""}
                     ${isCaptured ? "ring-2 ring-red-400" : ""}
@@ -305,7 +316,7 @@ export function AnimationPlayer({
             <FlyingOrbElement
               key={orb.id}
               orb={orb}
-              cellPx={cellSize.px}
+              cellPx={measuredCellPx}
               gap={gap}
               duration={FLY_DURATION}
             />
