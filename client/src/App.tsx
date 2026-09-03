@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { AuthProvider } from "@/lib/auth-context";
 import { HomeView } from "./components/home-view";
 import { CreateRoomView } from "./components/create-room-view";
@@ -13,6 +13,7 @@ import {
 import { OfflineGameView } from "./components/offline-game-view";
 import { TutorialView } from "./components/tutorial-view";
 import { Toaster } from "./components/ui/sonner";
+import { initAudio } from "@/lib/sounds";
 
 type AppView =
   | "home"
@@ -27,6 +28,21 @@ type AppView =
 
 function ChainReactionContent() {
   const [currentView, setCurrentView] = useState<AppView>("home");
+
+  // Unlock audio on first user interaction
+  useEffect(() => {
+    const unlock = () => {
+      initAudio();
+      document.removeEventListener("click", unlock);
+      document.removeEventListener("touchstart", unlock);
+    };
+    document.addEventListener("click", unlock);
+    document.addEventListener("touchstart", unlock);
+    return () => {
+      document.removeEventListener("click", unlock);
+      document.removeEventListener("touchstart", unlock);
+    };
+  }, []);
   const [playerName, setPlayerName] = useState("");
   const [roomId, setRoomId] = useState("");
   const [maxPlayers, setMaxPlayers] = useState("4");

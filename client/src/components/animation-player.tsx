@@ -202,7 +202,7 @@ export function AnimationPlayer({
   return (
     <div className="relative">
       {/* Board grid */}
-      <div className="flex flex-col items-center gap-0.5">
+      <div className="flex flex-col gap-0.5">
         {displayBoard.map((row, rowIndex) => (
           <div key={rowIndex} className="flex gap-0.5">
             {row.map((cell, colIndex) => {

@@ -48,7 +48,8 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
       config.cols,
       config.humanPlayers,
       config.aiPlayers,
-      config.playerName
+      config.playerName,
+      config.playerNames
     );
     setGameState(game);
     toast.success("Game started!");
@@ -171,7 +172,8 @@ export function OfflineGameView({ onNavigate, config }: OfflineGameViewProps) {
       config.cols,
       config.humanPlayers,
       config.aiPlayers,
-      config.playerName
+      config.playerName,
+      config.playerNames
     );
     setGameState(game);
     setWinnerSelected(false);

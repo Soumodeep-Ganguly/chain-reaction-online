@@ -423,7 +423,7 @@ function InteractiveBoard({
 
   return (
     <div className="relative">
-      <div className="flex flex-col items-center gap-0.5">
+      <div className="flex flex-col gap-0.5">
         {board.map((row, rowIndex) => (
           <div key={rowIndex} className="flex gap-0.5">
             {row.map((cell, colIndex) => {

@@ -200,7 +200,8 @@ export const createOfflineGame = (
   cols: number,
   playerCount: number,
   aiCount: number,
-  playerName: string
+  playerName: string,
+  playerNames?: string[]
 ): GameState => {
   const players: Player[] = [];
 
@@ -226,9 +227,10 @@ export const createOfflineGame = (
 
   // Add other human players (for local multiplayer)
   for (let i = 1; i < playerCount - aiCount; i++) {
+    const customName = playerNames?.[i];
     players.push({
       id: `human-${i}`,
-      name: `Player ${i + 1}`,
+      name: customName || `Player ${i + 1}`,
       color: PLAYER_COLORS[(aiCount + i) % PLAYER_COLORS.length],
       active: true,
       hasMoved: false,

@@ -1,15 +1,29 @@
 // Sound effects using Web Audio API — no external files needed
 
 let audioCtx: AudioContext | null = null;
+let userInteracted = false;
 
-function getAudioContext(): AudioContext {
+// Must be called from a user click/tap to unlock audio
+export function initAudio() {
   if (!audioCtx) {
     audioCtx = new AudioContext();
   }
-  // Resume if suspended (browsers block autoplay)
   if (audioCtx.state === "suspended") {
     audioCtx.resume();
   }
+  userInteracted = true;
+}
+
+function getAudioContext(): AudioContext | null {
+  if (!audioCtx) {
+    audioCtx = new AudioContext();
+  }
+  // If user hasn't interacted yet, try to resume but don't fail
+  if (audioCtx.state === "suspended" && userInteracted) {
+    audioCtx.resume();
+  }
+  // Don't play if context is suspended (browser blocked autoplay)
+  if (audioCtx.state === "suspended") return null;
   return audioCtx;
 }
 
@@ -31,9 +45,9 @@ function createNoiseBuffer(ctx: AudioContext, duration: number): AudioBuffer {
 export function playPlaceOrb() {
   try {
     const ctx = getAudioContext();
+    if (!ctx) return;
     const now = ctx.currentTime;
 
-    // Soft pop: quick sine wave sweep
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = "sine";
@@ -47,7 +61,7 @@ export function playPlaceOrb() {
     osc.start(now);
     osc.stop(now + 0.1);
   } catch {
-    // Silently ignore if audio not supported
+    // Silently ignore
   }
 }
 
@@ -56,9 +70,10 @@ export function playPlaceOrb() {
 export function playExplosion() {
   try {
     const ctx = getAudioContext();
+    if (!ctx) return;
     const now = ctx.currentTime;
 
-    // Layer 1: Low boom (sine wave dropping)
+    // Layer 1: Low boom
     const osc1 = ctx.createOscillator();
     const gain1 = ctx.createGain();
     osc1.type = "sine";
@@ -71,7 +86,7 @@ export function playExplosion() {
     osc1.start(now);
     osc1.stop(now + 0.3);
 
-    // Layer 2: Noise burst for crunch
+    // Layer 2: Noise burst
     const noiseBuffer = createNoiseBuffer(ctx, 0.15);
     const noiseSource = ctx.createBufferSource();
     noiseSource.buffer = noiseBuffer;
@@ -88,7 +103,7 @@ export function playExplosion() {
     noiseSource.start(now);
     noiseSource.stop(now + 0.15);
 
-    // Layer 3: Mid click for impact
+    // Layer 3: Mid click
     const osc2 = ctx.createOscillator();
     const gain2 = ctx.createGain();
     osc2.type = "triangle";
@@ -110,12 +125,11 @@ export function playExplosion() {
 export function playChainReaction(step: number = 0) {
   try {
     const ctx = getAudioContext();
+    if (!ctx) return;
     const now = ctx.currentTime;
 
-    // Higher pitch for each step in the chain
     const baseFreq = 300 + step * 150;
 
-    // Quick ascending tone
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = "sawtooth";
@@ -129,7 +143,6 @@ export function playChainReaction(step: number = 0) {
     osc.start(now);
     osc.stop(now + 0.2);
 
-    // Add a small noise click
     const noiseBuffer = createNoiseBuffer(ctx, 0.06);
     const noiseSource = ctx.createBufferSource();
     noiseSource.buffer = noiseBuffer;
@@ -150,14 +163,14 @@ export function playChainReaction(step: number = 0) {
 export function playCapture() {
   try {
     const ctx = getAudioContext();
+    if (!ctx) return;
     const now = ctx.currentTime;
 
-    // Two-note ascending chime
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = "sine";
-    osc.frequency.setValueAtTime(523, now); // C5
-    osc.frequency.setValueAtTime(659, now + 0.08); // E5
+    osc.frequency.setValueAtTime(523, now);
+    osc.frequency.setValueAtTime(659, now + 0.08);
     gain.gain.setValueAtTime(0.15, now);
     gain.gain.setValueAtTime(0.15, now + 0.08);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
@@ -175,10 +188,10 @@ export function playCapture() {
 export function playVictory() {
   try {
     const ctx = getAudioContext();
+    if (!ctx) return;
     const now = ctx.currentTime;
 
-    // Three-note ascending fanfare
-    const notes = [523, 659, 784]; // C5, E5, G5
+    const notes = [523, 659, 784];
     notes.forEach((freq, i) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -202,6 +215,7 @@ export function playVictory() {
 export function playWrongMove() {
   try {
     const ctx = getAudioContext();
+    if (!ctx) return;
     const now = ctx.currentTime;
 
     const osc = ctx.createOscillator();

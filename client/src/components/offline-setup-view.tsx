@@ -27,6 +27,7 @@ export interface OfflineGameConfig {
   aiPlayers: number;
   aiDifficulty: "easy" | "medium" | "hard";
   playerName: string;
+  playerNames?: string[];
   mode: "vs-cpu" | "vs-humans";
 }
 
@@ -41,6 +42,7 @@ export function OfflineSetupView({
   const [boardCols, setBoardCols] = useState("6");
   const [humanCount, setHumanCount] = useState("2"); // For vs-humans mode
   const [aiDifficulty, setAiDifficulty] = useState<"easy" | "medium" | "hard">("medium");
+  const [playerNames, setPlayerNames] = useState<string[]>(["", "", "", "", "", ""]);
 
   useEffect(() => {
     if (user?.gameName) {
@@ -62,13 +64,19 @@ export function OfflineSetupView({
         mode: "vs-cpu",
       });
     } else {
+      const count = parseInt(humanCount);
+      const names = [playerName.trim()];
+      for (let i = 1; i < count; i++) {
+        names.push(playerNames[i]?.trim() || `Player ${i + 1}`);
+      }
       onStartGame({
         rows: parseInt(boardRows),
         cols: parseInt(boardCols),
-        humanPlayers: parseInt(humanCount),
+        humanPlayers: count,
         aiPlayers: 0,
-        aiDifficulty: "medium", // not used
+        aiDifficulty: "medium",
         playerName: playerName.trim(),
+        playerNames: names,
         mode: "vs-humans",
       });
     }
@@ -221,7 +229,7 @@ export function OfflineSetupView({
             )}
 
             {mode === "vs-humans" && (
-              <div className="space-y-2">
+              <div className="space-y-3">
                 <Label className="flex items-center gap-2">
                   <Users className="h-4 w-4" />
                   Number of Players
@@ -241,6 +249,45 @@ export function OfflineSetupView({
                 <p className="text-xs text-gray-500">
                   Players take turns on the same device
                 </p>
+
+                {/* Player name inputs */}
+                <div className="space-y-2">
+                  <Label>Player Names</Label>
+                  {Array.from({ length: parseInt(humanCount) }, (_, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <div
+                        className="w-3 h-3 rounded-full flex-shrink-0"
+                        style={{
+                          backgroundColor: [
+                            "#ef4444", "#3b82f6", "#22c55e",
+                            "#f59e0b", "#a855f7", "#ec4899",
+                          ][i],
+                        }}
+                      />
+                      {i === 0 ? (
+                        <Input
+                          placeholder="Your name"
+                          value={playerName}
+                          onChange={(e) => setPlayerName(e.target.value)}
+                          className="border-2 flex-1"
+                          maxLength={20}
+                        />
+                      ) : (
+                        <Input
+                          placeholder={`Player ${i + 1} name`}
+                          value={playerNames[i] || ""}
+                          onChange={(e) => {
+                            const newNames = [...playerNames];
+                            newNames[i] = e.target.value;
+                            setPlayerNames(newNames);
+                          }}
+                          className="border-2 flex-1"
+                          maxLength={20}
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
