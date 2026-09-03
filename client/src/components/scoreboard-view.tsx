@@ -11,7 +11,7 @@ interface ScoreboardViewProps {
 }
 
 export function ScoreboardView({ onNavigate }: ScoreboardViewProps) {
-  const { token, isAuthenticated, user } = useAuth();
+  const { user } = useAuth();
   const [scoreboard, setScoreboard] = useState<ScoreboardEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");

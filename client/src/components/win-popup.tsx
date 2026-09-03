@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Trophy, UserPlus, X, Star } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { saveOfflineScore } from "@/lib/score-tracker";
