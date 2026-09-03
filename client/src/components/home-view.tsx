@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChainReactionLogo } from "@/components/chain-reaction-logo";
 import { useAuth } from "@/lib/auth-context";
-import { User, LogIn, Wifi, WifiOff, Users, Gamepad2 } from "lucide-react";
+import { User, LogIn, Wifi, WifiOff, Users, Gamepad2, BookOpen } from "lucide-react";
 
 interface HomeViewProps {
   onNavigate: (
@@ -13,6 +13,7 @@ interface HomeViewProps {
       | "profile"
       | "auth"
       | "offline-setup"
+      | "tutorial"
   ) => void;
 }
 
@@ -47,6 +48,15 @@ export function HomeView({ onNavigate }: HomeViewProps) {
                 2-6 Players • Explosive Chain Reactions!
               </div>
             </div>
+
+            {/* Tutorial Button */}
+            <button
+              className="w-full min-h-[44px] px-4 md:px-6 rounded-md inline-flex items-center justify-center gap-2 text-base md:text-lg font-bold transition-all border-2 border-emerald-400 bg-white text-emerald-700 hover:bg-emerald-50 active:scale-95"
+              onClick={() => onNavigate("tutorial")}
+            >
+              <BookOpen className="h-4 w-4 md:h-5 md:w-5" />
+              How to Play
+            </button>
 
             {/* Online Section */}
             <div className="space-y-2 md:space-y-3">

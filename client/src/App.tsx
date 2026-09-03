@@ -11,6 +11,7 @@ import {
   OfflineGameConfig,
 } from "./components/offline-setup-view";
 import { OfflineGameView } from "./components/offline-game-view";
+import { TutorialView } from "./components/tutorial-view";
 import { Toaster } from "./components/ui/sonner";
 
 type AppView =
@@ -21,7 +22,8 @@ type AppView =
   | "auth"
   | "profile"
   | "offline-setup"
-  | "offline-game";
+  | "offline-game"
+  | "tutorial";
 
 function ChainReactionContent() {
   const [currentView, setCurrentView] = useState<AppView>("home");
@@ -101,6 +103,13 @@ function ChainReactionContent() {
         <OfflineGameView
           onNavigate={() => setCurrentView("home")}
           config={offlineConfig}
+        />
+      )}
+
+      {currentView === "tutorial" && (
+        <TutorialView
+          onNavigate={setCurrentView}
+          onStartGame={() => setCurrentView("offline-setup")}
         />
       )}
 

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { AnimationFrame, FlyingOrb, Player } from "@/types/game";
 import { getCellCapacity } from "@/lib/game-helpers";
+import { playPlaceOrb, playExplosion, playChainReaction, playCapture } from "@/lib/sounds";
 
 interface AnimationPlayerProps {
   frames: AnimationFrame[];
@@ -65,6 +66,16 @@ export function AnimationPlayer({
 
       // Phase 1: Show exploding cells (glow effect)
       if (frame.explodingCells.length > 0) {
+        // Play explosion sound
+        if (frameIndex === 0) {
+          playExplosion();
+        } else {
+          playChainReaction(frameIndex - 1);
+        }
+        if (frame.capturedCells.length > 0) {
+          playCapture();
+        }
+
         const explodeKeys = new Set(frame.explodingCells.map(c => `${c.row}-${c.col}`));
         setExplodingCells(explodeKeys);
 
@@ -130,6 +141,7 @@ export function AnimationPlayer({
         }, EXPLODE_DURATION);
       } else if (frame.arrivedCells.length > 0) {
         // First frame (just placing an orb) - no explosion
+        playPlaceOrb();
         setDisplayBoard(prev => {
           const newBoard = prev.map(r => r.map(c => ({ ...c })));
           for (const arrived of frame.arrivedCells) {
