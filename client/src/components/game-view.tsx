@@ -83,7 +83,7 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
         const beforeBoard = prevBoardRef.current;
         if (beforeBoard && nextState.board && nextState.turnEvents) {
           const placeEvent = nextState.turnEvents.find((e: any) => e.type === "place");
-          if (placeEvent && placeEvent.row !== undefined) {
+          if (placeEvent && placeEvent.row !== undefined && placeEvent.col !== undefined) {
             const getPlayerColor = (id: string) => nextState.players.find((p) => p.id === id)?.color || "#6b7280";
             const sequence = generateAnimationSequence(
               beforeBoard,
