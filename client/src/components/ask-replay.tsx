@@ -1,5 +1,3 @@
-import { Card } from "@/components/ui/card";
-
 interface AskReplayProps {
   confirmAction: () => void;
   declineAction: () => void;
@@ -16,22 +14,22 @@ export function AskReplay({
   declineText,
 }: AskReplayProps) {
   return (
-    <Card className="p-4 bg-black/20 backdrop-blur-sm">
-      <div className="text-white text-center mb-4 font-bold">{title}</div>
-      <div className="grid grid-cols-2 gap-4">
-        <div
-          className="bg-green-500 hover:bg-green-600 p-2 font-bold text-white border rounded flex items-center justify-center cursor-pointer transition-transform hover:scale-105"
-          onClick={() => confirmAction()}
+    <div className="bg-gray-900 rounded-2xl p-6 shadow-2xl max-w-sm w-full mx-4">
+      <h3 className="text-lg font-bold text-white text-center mb-4">{title}</h3>
+      <div className="flex gap-3">
+        <button
+          className="flex-1 h-10 px-4 rounded-lg bg-emerald-600 text-white font-bold hover:bg-emerald-700 transition-all active:scale-95"
+          onClick={confirmAction}
         >
           {confirmText}
-        </div>
-        <div
-          className="bg-red-500 hover:bg-red-600 p-2 font-bold text-white border rounded flex items-center justify-center cursor-pointer transition-transform hover:scale-105"
-          onClick={() => declineAction()}
+        </button>
+        <button
+          className="flex-1 h-10 px-4 rounded-lg bg-gray-600 text-white font-bold hover:bg-gray-500 transition-all active:scale-95"
+          onClick={declineAction}
         >
           {declineText}
-        </div>
+        </button>
       </div>
-    </Card>
+    </div>
   );
 }

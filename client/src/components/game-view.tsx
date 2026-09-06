@@ -33,18 +33,25 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
   const joinedRef = useRef(false);
   const firstConnectRef = useRef(true);
   const prevBoardRef = useRef<{ orbs: number; ownerId: string | null }[][] | null>(null);
-  const pendingStateRef = useRef<GameState | null>(null);
+  const pendingQueueRef = useRef<GameState[]>([]);
+  const pendingWinnerRef = useRef<Player | null>(null);
+  // Refs to allow stable socket effect (deps [roomId,playerName] only) while reading latest values
+  const isAnimatingRef = useRef(false);
+  const gameStateRef = useRef<GameState | null>(null);
 
-  // Handle animation completion
+  // Keep refs in sync with state
+  useEffect(() => { isAnimatingRef.current = isAnimating; }, [isAnimating]);
+  useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
+
+  // Handle animation completion - drain FIFO queue kept via refs
+  // winnerSelected is deferred until animation fully completes (fixes popup before animation)
   const handleAnimationComplete = useCallback(() => {
-    setIsAnimating(false);
     setAnimationFrames([]);
 
-    if (pendingStateRef.current) {
-      const finalState = pendingStateRef.current;
+    if (pendingQueueRef.current.length > 0) {
+      const finalState = pendingQueueRef.current.shift()!;
       prevBoardRef.current = finalState.board.map(r => r.map(c => ({ ...c })));
       setGameState(finalState);
-      pendingStateRef.current = null;
 
       if (finalState.turnEvents && finalState.turnEvents.length > 0) {
         const logs: string[] = [];
@@ -62,8 +69,67 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
         setEventLog((prev) => [...prev.slice(-10), ...logs]);
       }
 
-      if (finalState.winner) {
+      // Defer winner popup until queue fully drained - do not set yet if more pending
+      const hasMorePending = pendingQueueRef.current.length > 0;
+
+      if (!hasMorePending && (finalState.winner || pendingWinnerRef.current)) {
         setWinnerSelected(true);
+        pendingWinnerRef.current = null;
+      }
+
+      // If more states queued while we were animating, start next animation immediately
+      if (pendingQueueRef.current.length > 0) {
+        const nextState = pendingQueueRef.current[0];
+        const beforeBoard = prevBoardRef.current;
+        if (beforeBoard && nextState.board && nextState.turnEvents) {
+          const placeEvent = nextState.turnEvents.find((e: any) => e.type === "place");
+          if (placeEvent && placeEvent.row !== undefined) {
+            const getPlayerColor = (id: string) => nextState.players.find((p) => p.id === id)?.color || "#6b7280";
+            const sequence = generateAnimationSequence(
+              beforeBoard,
+              nextState.rows,
+              nextState.cols,
+              placeEvent.row,
+              placeEvent.col,
+              placeEvent.playerId || "",
+              getPlayerColor
+            );
+            if (sequence.frames.length > 1) {
+              setPreAnimationBoard(beforeBoard);
+              setAnimationFrames(sequence.frames);
+              // keep isAnimating true, isAnimatingRef already true
+              return;
+            }
+          }
+        }
+        // No animation needed for next - flush it now
+        const immediateNext = pendingQueueRef.current.shift()!;
+        prevBoardRef.current = immediateNext.board.map(r => r.map(c => ({ ...c })));
+        setGameState(immediateNext);
+        if (immediateNext.winner || pendingWinnerRef.current) {
+          // if this was the last queued and it has a winner, show popup now
+          if (pendingQueueRef.current.length === 0) {
+            setWinnerSelected(true);
+            pendingWinnerRef.current = null;
+          }
+        }
+      }
+      // No more pending - end animating (popup already handled above)
+      if (pendingQueueRef.current.length === 0) {
+        setIsAnimating(false);
+        isAnimatingRef.current = false;
+        // If winner was queued via game-over (not via finalState.winner) ensure popup shows
+        if (pendingWinnerRef.current) {
+          setWinnerSelected(true);
+          pendingWinnerRef.current = null;
+        }
+      }
+    } else {
+      setIsAnimating(false);
+      isAnimatingRef.current = false;
+      if (pendingWinnerRef.current) {
+        setWinnerSelected(true);
+        pendingWinnerRef.current = null;
       }
     }
   }, []);
@@ -120,7 +186,27 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
     };
     socket.on("connect", handleConnect);
 
+    const handleRoomState = (state: GameState) => {
+      // room-state is emitted on join/leave/disconnect - use as source of truth if not animating
+      if (isAnimatingRef.current) {
+        pendingQueueRef.current.push(state);
+        return;
+      }
+      // Before game started, just update players/lobby info
+      // During game, board/currentPlayer matters - sync fully
+      prevBoardRef.current = state.board.map(r => r.map(c => ({ ...c })));
+      setGameState(state);
+      if (!state.started) setEventLog([]);
+    };
+
     socket.on("game-started", (state: GameState) => {
+      // Clear any pending from lobby
+      pendingQueueRef.current = [];
+      pendingWinnerRef.current = null;
+      setWinnerSelected(false);
+      setIsAnimating(false);
+      isAnimatingRef.current = false;
+      setAnimationFrames([]);
       setGameState(state);
       setEventLog([]);
       prevBoardRef.current = state.board.map(r => r.map(c => ({ ...c })));
@@ -128,8 +214,9 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
     });
 
     socket.on("game-updated", (state: GameState) => {
-      if (isAnimating) {
-        pendingStateRef.current = state;
+      // Use ref to avoid stale closure - keep animation via refs
+      if (isAnimatingRef.current) {
+        pendingQueueRef.current.push(state);
         return;
       }
 
@@ -144,10 +231,11 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
         );
 
         if (result && result.frames.length > 1) {
-          pendingStateRef.current = state;
+          pendingQueueRef.current = [state];
           setPreAnimationBoard(result.preBoard);
           setAnimationFrames(result.frames);
           setIsAnimating(true);
+          isAnimatingRef.current = true;
           return;
         }
       }
@@ -165,10 +253,18 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
       }
     });
 
+    socket.on("room-state", handleRoomState);
+
     socket.on("player-joined", (state: GameState) => {
-      setGameState((prev) =>
-        prev ? { ...prev, players: state.players } : null
-      );
+      // Keep lobby sync - if game not started, update via room-state path, but also handle if not animating
+      if (isAnimatingRef.current) return;
+      const cur = gameStateRef.current;
+      if (cur && cur.started) {
+        // In-game joins shouldn't happen (maxPlayers), ignore or merge players only to not clobber board
+        setGameState((prev) => (prev ? { ...prev, players: state.players } : state));
+      } else {
+        setGameState((prev) => (prev ? { ...prev, players: state.players, maxPlayers: state.maxPlayers, rows: state.rows, cols: state.cols } : state));
+      }
       if (!state.started) {
         toast.info("Waiting for more players to join...");
       }
@@ -179,39 +275,47 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
         onNavigate("home");
         return;
       }
-      const player = gameState?.players.find((p) => p.id === playerId);
+      const cur = gameStateRef.current;
+      const player = cur?.players.find((p) => p.id === playerId);
       if (player) {
         toast.info(`${player.name} left the game`);
       }
-      const remaining =
-        gameState?.players.filter((p) => p.id !== playerId) || [];
-      if (remaining.length <= 1) {
+      const remaining = cur?.players.filter((p) => p.id !== playerId) || [];
+      if (remaining.length <= 1 && cur?.started) {
         toast.info("Not enough players. Returning to home...");
         setTimeout(() => onNavigate("home"), 1500);
       }
     });
 
-    socket.on("invalid-move", ({ message }: { message: string }) => {
-      toast.error(message);
+    socket.on("invalid-move", ({ message, reason }: { message: string; reason?: string }) => {
+      // reason helps debug ghost turn vs cell_owned
+      if (reason === "not_your_turn") toast.error("Not your turn yet - board is syncing...");
+      else toast.error(message);
     });
 
     socket.on("game-over", ({ winner }: { winner: Player }) => {
       toast.success(
         `${winner.id === socket.id ? "You" : winner.name} won the game!`
       );
-      setWinnerSelected(true);
+      // Defer popup until animation completes (fixes popup before animation)
+      if (isAnimatingRef.current || pendingQueueRef.current.length > 0) {
+        pendingWinnerRef.current = winner;
+      } else {
+        setWinnerSelected(true);
+      }
     });
 
     return () => {
       socket.off("connect", handleConnect);
       socket.off("game-started");
       socket.off("game-updated");
+      socket.off("room-state", handleRoomState);
       socket.off("player-joined");
       socket.off("player-left");
       socket.off("invalid-move");
       socket.off("game-over");
     };
-  }, [roomId, playerName, gameState, isAnimating, onNavigate, simulateChainReaction]);
+  }, [roomId, playerName]);
 
   useEffect(() => {
     if (gameState) {
@@ -221,7 +325,7 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
   }, [gameState]);
 
   const handleCellClick = (row: number, col: number) => {
-    if (!isCurrentPlayer || !gameState || isAnimating) return;
+    if (!isCurrentPlayer || !gameState || isAnimatingRef.current) return;
     socket.emit("place-orb", { roomId, row, col });
   };
 
@@ -273,8 +377,9 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
     <div className="min-h-dvh flex flex-col bg-gradient-to-b from-emerald-600 via-teal-500 to-cyan-500">
       {gameState?.players.length > 1 &&
         gameState?.players[0].id === socket.id &&
-        winnerSelected && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        winnerSelected &&
+        !isAnimating && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
             <AskReplay
               confirmAction={replay}
               declineAction={destroyRoom}
@@ -286,7 +391,7 @@ export function GameView({ onNavigate, roomId, playerName }: GameViewProps) {
         )}
 
       {exitGame && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
           <AskReplay
             confirmAction={() => {
               socket.emit("leave-room", { roomId });
